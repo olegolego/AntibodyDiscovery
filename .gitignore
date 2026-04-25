@@ -5,12 +5,15 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+**/.venv/
+**/venv/
 *.db
 *.db-shm
 *.db-wal
 
 # Node
 node_modules/
+**/node_modules/
 dist/
 .cache/
 
@@ -22,17 +25,31 @@ dist/
 .env
 *.env
 
-# Tool caches and weights (large binary files)
-tools/*/cache.db
+# Model weights and large binaries
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.h5
+*.hdf5
+*.bin
+*.safetensors
+*.npz
+*.npy
+
+# Tool-specific large directories
 tools/abmap/pretrained_models/
 tools/equidock/repo/
-tools/equidock/.venv/
-tools/ablang/.venv/
+tools/rfdiffusion/RFdiffusion/
+tools/rfdiffusion/models/
+tools/*/cache.db
 
 # Run logs
-/tmp/
+/tmp/pdp-runs/
+
+# Cloned repos inside project
+frontend/AntibodyDiscovery/
 
 # IDE
 .idea/
 .vscode/settings.json
-tools/rfdiffusion/RFdiffusion/
