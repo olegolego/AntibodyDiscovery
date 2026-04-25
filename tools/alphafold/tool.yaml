@@ -1,0 +1,30 @@
+id: alphafold_monomer
+name: AlphaFold Structure
+version: "2.3"
+category: structure_prediction
+description: >
+  Fetch a predicted protein structure from the AlphaFold EBI database.
+  Requires a valid UniProt accession ID (e.g. P00533 for EGFR, P04637 for TP53).
+  Returns a PDB structure, per-residue pLDDT confidence scores, and a PAE matrix.
+
+inputs:
+  - name: uniprot_id
+    type: str
+    required: true
+    description: UniProt accession ID (e.g. P00533)
+
+outputs:
+  - name: structure
+    type: pdb
+    description: Predicted 3D structure in PDB format (B-factors = pLDDT)
+  - name: plddt
+    type: json
+    description: Per-residue confidence scores and summary statistics
+  - name: pae
+    type: json
+    description: Predicted Aligned Error matrix
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 120

@@ -1,0 +1,96 @@
+id: diffusion_design
+name: Diffusion Designer
+version: "0.1"
+category: toolbox
+wip: true
+description: >
+  Configure and run a custom diffusion model for antibody sequence or structure generation.
+  Supports fine-tuning pre-trained diffusion models (RFdiffusion, FrameDiff, Chroma)
+  on user-provided structural data, or sampling from a pre-trained checkpoint.
+  Design custom noise schedules, conditioning signals, and motif constraints.
+
+inputs:
+  - name: base_model
+    type: str
+    required: false
+    default: "rfdiffusion"
+    description: "Base model to build on: rfdiffusion | framediff | chroma | custom"
+
+  - name: target_structure
+    type: pdb
+    required: false
+    default: ""
+    description: "Conditioning target PDB (e.g. antigen for binder design)."
+
+  - name: training_pdbs
+    type: json
+    required: false
+    default: null
+    description: >
+      JSON array of PDB strings for fine-tuning. Leave null to use the base
+      model weights without fine-tuning.
+
+  - name: motif_residues
+    type: str
+    required: false
+    default: ""
+    description: >
+      Space-separated residue indices to hold fixed during diffusion (motif scaffolding).
+
+  - name: length_min
+    type: int
+    required: false
+    default: 60
+    description: "Minimum generated sequence length (residues)."
+
+  - name: length_max
+    type: int
+    required: false
+    default: 150
+    description: "Maximum generated sequence length (residues)."
+
+  - name: num_designs
+    type: int
+    required: false
+    default: 10
+    description: "Number of designs to generate per run."
+
+  - name: noise_steps
+    type: int
+    required: false
+    default: 200
+    description: "Diffusion noise steps (fewer = faster, more = better quality)."
+
+  - name: guidance_scale
+    type: float
+    required: false
+    default: 1.0
+    description: "Classifier-free guidance scale. 1.0 = no guidance, >1 strengthens conditioning."
+
+  - name: fine_tune_epochs
+    type: int
+    required: false
+    default: 0
+    description: "Fine-tuning epochs on training_pdbs. 0 = skip fine-tuning."
+
+outputs:
+  - name: designs
+    type: json
+    description: "Array of generated design PDB strings, ranked by model confidence."
+
+  - name: best_design
+    type: pdb
+    description: "Highest-confidence generated structure."
+
+  - name: model_checkpoint
+    type: json
+    description: "Fine-tuned model checkpoint (if fine_tune_epochs > 0)."
+
+  - name: scores
+    type: json
+    description: "Per-design confidence, novelty, and diversity metrics."
+
+runtime:
+  kind: local_python
+  gpu: true
+  timeout_seconds: 7200

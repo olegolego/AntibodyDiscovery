@@ -1,0 +1,58 @@
+id: equidock
+name: EquiDock
+version: "1.0.0"
+category: docking
+description: >
+  Rigid protein-protein docking with an SE(3)-equivariant neural network (ICLR 2022).
+  Takes two PDB structures — ligand (antibody) and receptor (antigen) — and predicts
+  the docked complex in seconds. No restraints or epitope residue numbers required.
+  Complement to HADDOCK3: use EquiDock for fast screening, HADDOCK3 for accurate
+  refinement. CPU-only on local machines; GPU accelerated on cloud instances.
+
+inputs:
+  - name: ligand
+    type: pdb
+    required: true
+    description: >
+      Antibody (or any ligand protein) PDB. This molecule is repositioned during docking.
+      Wire from ImmuneBuilder, ESMFold, or AlphaFold output.
+
+  - name: receptor
+    type: pdb
+    required: true
+    default_file: "app/tools/data/targets/spike_rbd.pdb"
+    description: >
+      Antigen / target PDB. Stays fixed as the docking reference frame.
+      Default: SARS-CoV-2 spike RBD (chain B, residues 319–541).
+      Typically wired from the Target Input node.
+
+  - name: dataset
+    type: str
+    required: false
+    default: dips
+    description: >
+      Pretrained checkpoint to use. 'dips' (8-layer model, trained on 42K diverse
+      protein pairs from DIPS — better for general use) or 'db5' (5-layer model,
+      trained on the DB5.5 antibody-antigen benchmark). Default: dips.
+
+  - name: remove_clashes
+    type: bool
+    required: false
+    default: true
+    description: >
+      Run 2000 steps of gradient-descent clash removal after rigid docking.
+      Adds ~5 s but improves steric quality. Disable for maximum speed.
+
+outputs:
+  - name: best_complex
+    type: pdb
+    description: "Docked antibody-antigen complex PDB (transformed ligand + original receptor)."
+
+  - name: metadata
+    type: json
+    description: "Rotation matrix, translation vector, dataset used, and residue count."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 300

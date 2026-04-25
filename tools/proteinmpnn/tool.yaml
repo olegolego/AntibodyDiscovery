@@ -1,0 +1,38 @@
+id: proteinmpnn
+name: ProteinMPNN
+version: "1.0.1"
+category: sequence_design
+icon: proteinmpnn.svg
+description: >
+  Message-passing neural network for inverse folding: given a backbone structure,
+  design amino acid sequences predicted to fold into that structure.
+
+inputs:
+  - name: structure
+    type: pdb
+    required: true
+    description: Backbone structure to design sequences for
+  - name: num_sequences
+    type: int
+    required: false
+    default: 8
+    description: Number of sequences to sample per backbone
+  - name: sampling_temp
+    type: float
+    required: false
+    default: 0.1
+    description: Sampling temperature (lower = more conservative)
+
+outputs:
+  - name: sequence
+    type: fasta
+    description: Designed amino acid sequences (FASTA format, multi-record)
+  - name: scores
+    type: json
+    description: Per-sequence log-probability scores
+
+runtime:
+  kind: http
+  endpoint_env: PROTEINMPNN_URL
+  gpu: true
+  timeout_seconds: 300

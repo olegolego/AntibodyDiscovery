@@ -1,0 +1,88 @@
+id: custom_dnn
+name: Custom DNN
+version: "0.1"
+category: toolbox
+wip: true
+description: >
+  Design and train a custom deep neural network for bio-property prediction.
+  Supports MLP, Transformer, and CNN architectures over sequence or embedding inputs.
+  Configure architecture, training hyperparameters, and evaluation metrics.
+  Outputs a trained model artifact and per-sample predictions.
+
+inputs:
+  - name: sequences
+    type: fasta
+    required: true
+    default: ""
+    description: Input sequences for training or inference (FASTA format).
+
+  - name: labels
+    type: json
+    required: false
+    default: null
+    description: >
+      Training labels as JSON array or {id: label} dict.
+      Omit at inference time (model_artifact required instead).
+
+  - name: model_artifact
+    type: json
+    required: false
+    default: null
+    description: >
+      Pre-trained model artifact (from a previous Custom DNN run). If provided,
+      skips training and runs inference only.
+
+  - name: architecture
+    type: str
+    required: false
+    default: "mlp"
+    description: "Architecture type: mlp | transformer | cnn"
+
+  - name: hidden_dims
+    type: str
+    required: false
+    default: "256 128 64"
+    description: >
+      Space-separated hidden layer widths. E.g. '512 256 128' for a 3-layer MLP.
+
+  - name: epochs
+    type: int
+    required: false
+    default: 50
+    description: "Training epochs."
+
+  - name: learning_rate
+    type: float
+    required: false
+    default: 0.001
+    description: "Adam learning rate."
+
+  - name: task
+    type: str
+    required: false
+    default: "regression"
+    description: "regression | binary_classification | multiclass"
+
+  - name: num_classes
+    type: int
+    required: false
+    default: 2
+    description: "Number of classes (multiclass only)."
+
+outputs:
+  - name: model_artifact
+    type: json
+    description: "Trained model weights and config (pass to downstream DNN nodes)."
+
+  - name: predictions
+    type: json
+    description: "Per-sequence predictions with confidence scores."
+
+  - name: metrics
+    type: json
+    description: "Training/eval metrics: loss, RMSE/AUC, per-epoch curves."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 3600

@@ -1,0 +1,115 @@
+id: haddock3
+name: HADDOCK3 Docking
+version: "3.0"
+category: docking
+description: >
+  Antibody-antigen docking using HADDOCK3. Provide the antibody PDB (e.g. from ImmuneBuilder),
+  the antigen PDB, CDR loop residue ranges in the cleaned antibody (H+L merged, numbered from 1),
+  and the antigen epitope residue numbers. Runs locally via the haddock3 CLI. CPU-only, takes
+  15–90 min depending on sampling settings.
+
+inputs:
+  - name: antibody
+    type: pdb
+    required: true
+    description: >
+      Antibody structure PDB. Chains must be VH and VL (any chain IDs — specify below).
+      Typically wired from ImmuneBuilder output.
+
+  - name: antigen
+    type: pdb
+    required: true
+    default_file: "app/tools/data/targets/spike_rbd.pdb"
+    description: >
+      Antigen structure PDB. Residue numbers must match antigen_active_residues exactly — do not renumber.
+      Default: SARS-CoV-2 spike RBD (chain B, residues 319–541). Typically wired from Target Input.
+
+  - name: antigen_active_residues
+    type: str
+    required: true
+    default: "438 439 440 441 442 443 444 445 446 447 448 449 450 451 452 453 454 455 456 457 458 459 460 461 462 463 464 465 466 467 468 469 470 471 472 473 474 475 476 477 478 479 480 481 482 483 484 485 486 487 488 489 490 491 492 493 494 495 496 497 498 499 500 501 502 503 504 505 506"
+    description: >
+      Space-separated residue numbers of the antigen epitope (RBM / binding site).
+      Must match residue numbers in the antigen PDB as-is. Default: spike RBD receptor-binding motif.
+
+  - name: antigen_passive_residues
+    type: str
+    required: false
+    default: "345 346 347 348 351 352 405 417 420 421 422 436 437"
+    description: >
+      Space-separated residue numbers surrounding the epitope (passive restraints).
+      HADDOCK3 uses these as semi-flexible regions. Default: spike RBD residues flanking the RBM.
+
+  - name: cdr1_start
+    type: int
+    required: true
+    default: 26
+    description: "CDR-H1 start residue (in the cleaned, renumbered antibody, numbered from 1)."
+
+  - name: cdr1_end
+    type: int
+    required: true
+    default: 35
+    description: "CDR-H1 end residue."
+
+  - name: cdr2_start
+    type: int
+    required: true
+    default: 50
+    description: "CDR-H2 start residue."
+
+  - name: cdr2_end
+    type: int
+    required: true
+    default: 58
+    description: "CDR-H2 end residue."
+
+  - name: cdr3_start
+    type: int
+    required: true
+    default: 95
+    description: "CDR-H3 start residue."
+
+  - name: cdr3_end
+    type: int
+    required: true
+    default: 102
+    description: "CDR-H3 end residue."
+
+  - name: vh_chain
+    type: str
+    required: false
+    default: "H"
+    description: "Chain ID for the VH (heavy) chain in the antibody PDB."
+
+  - name: vl_chain
+    type: str
+    required: false
+    default: "L"
+    description: "Chain ID for the VL (light) chain in the antibody PDB. Leave empty for nanobodies."
+
+  - name: rigid_sampling
+    type: int
+    required: false
+    default: 100
+    description: "Number of rigid-body sampling configurations. Default 100 (faster); 1000 for production."
+
+  - name: select_top
+    type: int
+    required: false
+    default: 50
+    description: "Number of top models passed to flexible refinement. Default 50."
+
+outputs:
+  - name: best_complex
+    type: pdb
+    description: "Best-scored docked antibody-antigen complex."
+
+  - name: scores
+    type: json
+    description: "Top cluster CAPRI metrics: score, vdw, desolv, air, bsa (mean ± std)."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 7200

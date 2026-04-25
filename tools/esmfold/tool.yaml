@@ -1,0 +1,28 @@
+id: esmfold
+name: ESMFold
+version: "1.0.0"
+category: structure_prediction
+icon: esmfold.svg
+description: >
+  Fast end-to-end single-sequence protein structure prediction using ESM-2
+  language model embeddings. Good for rapid iteration; no MSA required.
+
+inputs:
+  - name: sequence
+    type: fasta
+    required: true
+    description: Amino acid sequence (single-letter FASTA)
+
+outputs:
+  - name: structure
+    type: pdb
+    description: Predicted 3D structure in PDB format
+  - name: plddt
+    type: json
+    description: Per-residue pLDDT confidence scores
+
+runtime:
+  kind: http
+  endpoint_env: ESMFOLD_URL
+  gpu: true
+  timeout_seconds: 600

@@ -1,0 +1,58 @@
+id: biophi
+name: BioPhi
+version: "1.2.0"
+category: sequence_design
+description: >
+  Antibody humanization using Sapiens deep learning model (RoBERTa-based).
+  Mutates non-human framework residues while preserving CDRs by default.
+  Reports percent identity to human germlines before and after humanization.
+  CPU only; runs in ~10 seconds.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: true
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS"
+    description: "VH sequence (single-letter AA, no FASTA header). Must be ≥110 residues."
+  - name: light_chain
+    type: fasta
+    required: false
+    default: "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+    description: "VL sequence. Optional — omit for VHH/nanobody humanization."
+  - name: humanize_cdrs
+    type: bool
+    required: false
+    default: false
+    description: "Whether to also humanize CDR residues (default: false — CDRs preserved)."
+  - name: iterations
+    type: int
+    required: false
+    default: 1
+    description: "Sapiens model iterations (1–3). More iterations = more humanization."
+  - name: scheme
+    type: str
+    required: false
+    default: "imgt"
+    description: "Numbering scheme: imgt, kabat, chothia, aho."
+
+outputs:
+  - name: heavy_chain_humanized
+    type: fasta
+    description: Humanized VH sequence.
+  - name: light_chain_humanized
+    type: fasta
+    description: Humanized VL sequence (empty string if no VL input).
+  - name: heavy_mutations
+    type: int
+    description: Number of mutations in VH.
+  - name: light_mutations
+    type: int
+    description: Number of mutations in VL (0 if no VL input).
+  - name: report
+    type: json
+    description: Per-position mutation details and humanness scores.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 120

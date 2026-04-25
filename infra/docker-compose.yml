@@ -1,0 +1,56 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: protein_design
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    env_file: ../backend/.env
+    ports:
+      - "8000:8000"
+    depends_on:
+      - postgres
+    volumes:
+      - ../backend:/app
+      - ../tools:/tools
+      - artifact_data:/app/artifacts
+
+  # worker:  (intentionally disabled — execution currently runs in-process via FastAPI
+  #   BackgroundTasks + asyncio.  The Celery/worker split is planned for v2 once we
+  #   move to GPU cloud workers.  Re-enable once app.workers.celery_app is implemented.)
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+  abmap:
+    build:
+      context: ../tools/abmap
+      dockerfile: Dockerfile
+    ports:
+      - "8005:8080"
+
+volumes:
+  postgres_data:
+  artifact_data:

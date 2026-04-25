@@ -1,0 +1,45 @@
+id: immunebuilder
+name: ImmuneBuilder
+version: "1.2"
+category: structure_prediction
+description: >
+  Fast, CPU-friendly antibody and nanobody structure prediction using ImmuneBuilder
+  (ABodyBuilder2 / NanoBodyBuilder2). Provide heavy chain only for a nanobody (VHH),
+  or both heavy and light chains for a full antibody (Fv region). Sequences must be
+  variable-domain sequences in single-letter amino acid format — no FASTA headers needed.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: true
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS"
+    description: VH or VHH sequence (single-letter AA, no headers). Min ~110 residues.
+  - name: light_chain
+    type: fasta
+    required: false
+    default: "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+    description: VL sequence for full antibody prediction. Omit for nanobody mode.
+  - name: num_models
+    type: int
+    required: false
+    default: 4
+    description: "Number of ensemble models to run (1–4). More models = better accuracy but slower. Default: 4."
+
+outputs:
+  - name: structure_1
+    type: pdb
+    description: Model 1 predicted structure (PDB)
+  - name: structure_2
+    type: pdb
+    description: Model 2 predicted structure (PDB)
+  - name: structure_3
+    type: pdb
+    description: Model 3 predicted structure (PDB)
+  - name: structure_4
+    type: pdb
+    description: Model 4 predicted structure (PDB)
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 300

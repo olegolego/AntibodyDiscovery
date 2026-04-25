@@ -1,0 +1,60 @@
+id: ablang
+name: AbLang Embedding
+version: "1.0.0"
+category: sequence_embedding
+description: >
+  Antibody language model (AbLang) trained on the Observed Antibody Space. Produces
+  sequence-level embeddings (768-dim), residue-level embeddings, per-position amino
+  acid likelihoods, or restores missing residues marked with '*'. Runs on CPU; no
+  GPU required.
+
+inputs:
+  - name: sequence
+    type: fasta
+    required: true
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAKDRLSITIRPRYYGLDVWGQGTLVTVSS"
+    description: >
+      Antibody heavy- or light-chain amino acid sequence (single-letter, no FASTA header).
+      Use '*' for unknown/missing positions (e.g. from BCR sequencing with incomplete N-terminus).
+
+  - name: chain_type
+    type: str
+    required: false
+    default: H
+    description: "Chain type: H for heavy, L for light."
+
+  - name: mode
+    type: str
+    required: false
+    default: seqcoding
+    description: >
+      Output mode. 'seqcoding' returns a single 768-dim vector per sequence (fixed length,
+      suitable for downstream ML). 'rescoding' returns a 768-dim vector per residue.
+      'likelihood' returns per-position amino acid log-probabilities (useful for mutation
+      scoring). 'restore' fills in '*' positions with the most probable amino acid.
+
+outputs:
+  - name: embedding
+    type: json
+    description: "768-dim sequence embedding (seqcoding mode only)."
+
+  - name: res_embeddings
+    type: json
+    description: "Per-residue 768-dim embeddings as a list of lists (rescoding mode only)."
+
+  - name: likelihoods
+    type: json
+    description: "Per-position amino acid log-probabilities, list of {aa: logprob} dicts (likelihood mode only)."
+
+  - name: restored_sequence
+    type: fasta
+    description: "Sequence with '*' positions filled in (restore mode only)."
+
+  - name: metadata
+    type: json
+    description: "Chain type, mode, sequence length, and embedding shape."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 120

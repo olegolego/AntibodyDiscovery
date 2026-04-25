@@ -1,0 +1,48 @@
+id: abmap
+name: AbMAP Embedding
+version: "0.1.0"
+category: sequence_embedding
+description: >
+  Antibody sequence embedding with AbMAP, using CDR-focused mutagenesis augmentation
+  and the upstream Bepler/Berger-backed AbMAP checkpoint. Accepts a single heavy or
+  light chain sequence and returns a JSON embedding plus metadata.
+
+inputs:
+  - name: sequence
+    type: fasta
+    required: true
+    description: Antibody heavy- or light-chain amino acid sequence (single-letter FASTA or raw sequence).
+  - name: chain_type
+    type: str
+    required: false
+    default: H
+    description: Antibody chain type. Use H for heavy chains and L for light chains.
+  - name: task
+    type: str
+    required: false
+    default: structure
+    description: Embedding head to use. Supported values are structure and function.
+  - name: embedding_type
+    type: str
+    required: false
+    default: fixed
+    description: Output mode. Supported values are fixed and variable.
+  - name: num_mutations
+    type: int
+    required: false
+    default: 10
+    description: Number of in-silico mutations used for AbMAP augmentation. Higher values improve fidelity but increase runtime.
+
+outputs:
+  - name: embedding
+    type: json
+    description: AbMAP embedding as a JSON array.
+  - name: metadata
+    type: json
+    description: Embedding metadata including task, shape, CDR length, and sequence length.
+
+runtime:
+  kind: http
+  endpoint_env: ABMAP_URL
+  gpu: false
+  timeout_seconds: 1800

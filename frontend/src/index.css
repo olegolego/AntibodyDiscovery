@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-canvas:   #080c18;
+  --color-surface:  #0e1425;
+  --color-surface2: #151e36;
+  --color-border:   #1e2d54;
+  --color-primary:  #6366f1;
+  --color-cyan:     #22d3ee;
+  --color-purple:   #a78bfa;
+  --color-pink:     #f472b6;
+  --color-emerald:  #34d399;
+  --color-amber:    #fbbf24;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background-color: var(--color-canvas);
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+/* ── Scrollbars ─────────────────────────────── */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e2d54; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #2e4480; }
+
+/* ── React Flow overrides ───────────────────── */
+.react-flow__background { background-color: var(--color-canvas) !important; }
+
+.react-flow__controls {
+  background: var(--color-surface) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 10px !important;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5) !important;
+}
+.react-flow__controls-button {
+  background: transparent !important;
+  border-bottom: 1px solid var(--color-border) !important;
+  color: #94a3b8 !important;
+  transition: background 0.15s;
+}
+.react-flow__controls-button:hover { background: var(--color-surface2) !important; }
+.react-flow__controls-button:last-child { border-bottom: none !important; }
+
+.react-flow__minimap {
+  background: var(--color-surface) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 10px !important;
+  overflow: hidden;
+}
+
+.react-flow__edge-path { stroke: #4f6fb0 !important; stroke-width: 2 !important; }
+.react-flow__edge.selected .react-flow__edge-path { stroke: #818cf8 !important; }
+.react-flow__connection-path { stroke: #818cf8 !important; }
+
+/* ── Gradient utilities ─────────────────────── */
+@layer utilities {
+  .gradient-border {
+    border: 1px solid transparent;
+    background-clip: padding-box;
+  }
+  .glow-indigo { box-shadow: 0 0 20px rgba(99,102,241,0.35); }
+  .glow-cyan   { box-shadow: 0 0 20px rgba(34,211,238,0.25); }
+}

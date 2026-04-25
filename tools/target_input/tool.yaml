@@ -1,0 +1,27 @@
+id: target_input
+name: Target Input
+version: "1.0.0"
+category: input
+icon: ""
+description: >
+  Input node for a target protein structure. Paste PDB text directly or upload a .pdb file.
+  The structure is passed downstream to binder design tools (e.g., RFdiffusion).
+
+inputs:
+  - name: target
+    type: pdb
+    required: true
+    default_file: "app/tools/data/targets/spike_rbd.pdb"
+    description: >
+      Target protein PDB structure. Default: SARS-CoV-2 spike RBD (chain B, residues 319–541).
+
+outputs:
+  - name: target
+    type: pdb
+    description: Target structure passed downstream to binder design tools
+
+runtime:
+  kind: local_python
+  endpoint_env: ""
+  gpu: false
+  timeout_seconds: 5

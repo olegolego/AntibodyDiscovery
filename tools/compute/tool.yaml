@@ -1,0 +1,22 @@
+id: compute
+name: Compute
+version: "1.0"
+category: compute
+description: >
+  Custom Python compute node. Connected upstream outputs are injected as
+  Python variables. Assign your result to `result`.
+
+inputs:
+  - name: code
+    type: python_code
+    required: true
+    default: "# upstream outputs are available as variables\n# assign your result to `result`\nresult = None\n"
+
+outputs:
+  - name: result
+    type: json
+
+runtime:
+  kind: local_python
+  timeout_seconds: 120
+  gpu: false

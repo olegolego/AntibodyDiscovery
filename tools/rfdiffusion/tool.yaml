@@ -1,0 +1,49 @@
+id: rfdiffusion
+name: RFdiffusion
+version: "1.1.0"
+category: structure_design
+description: >
+  Diffusion-based de novo protein backbone design. Generates novel protein backbones
+  either unconditionally or conditioned on a target structure (binder design).
+  For binder design, provide a target PDB and hotspot residues.
+  Uses Base_ckpt.pt for unconditional design and Complex_base_ckpt.pt for binder design.
+
+inputs:
+  - name: target_pdb
+    type: pdb
+    required: false
+    default: ""
+    description: Target protein structure for binder design (leave empty for unconditional)
+  - name: hotspot_residues
+    type: str
+    required: false
+    default: ""
+    description: "Hotspot residues on the target, e.g. A30,A33,A42 (chain+residue). Only used with target_pdb."
+  - name: num_designs
+    type: int
+    required: false
+    default: 1
+    description: Number of backbone designs to generate
+  - name: num_residues
+    type: int
+    required: false
+    default: 80
+    description: Length of the designed chain (residues)
+  - name: diffusion_steps
+    type: int
+    required: false
+    default: 50
+    description: "Number of diffusion timesteps (more = slower + higher quality). Range: 15–200."
+
+outputs:
+  - name: backbone
+    type: pdb
+    description: Designed backbone structure(s) in PDB format
+  - name: metadata
+    type: json
+    description: Run metadata (contig, pLDDT-like scores, trajectory info)
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 1800

@@ -1,0 +1,69 @@
+id: property_predictor
+name: Property Predictor
+version: "0.1"
+category: toolbox
+wip: true
+description: >
+  ML-based prediction of antibody biophysical properties from sequence alone.
+  Predicts: binding affinity (ΔG), thermostability (Tm), developability flags
+  (aggregation, hydrophobicity, charge), and immunogenicity risk.
+  Uses ESM-2 sequence embeddings as features with fine-tunable prediction heads.
+
+inputs:
+  - name: sequences
+    type: fasta
+    required: true
+    default: ""
+    description: "Antibody sequences to evaluate (FASTA, one or more)."
+
+  - name: properties
+    type: str
+    required: false
+    default: "affinity stability developability"
+    description: >
+      Space-separated list of properties to predict.
+      Options: affinity | stability | developability | immunogenicity | all
+
+  - name: antigen_sequence
+    type: fasta
+    required: false
+    default: ""
+    description: "Antigen sequence for affinity prediction (required if 'affinity' selected)."
+
+  - name: embedding_model
+    type: str
+    required: false
+    default: "esm2_t33_650M"
+    description: "ESM-2 checkpoint for sequence embeddings: esm2_t6_8M | esm2_t12_35M | esm2_t33_650M | esm2_t36_3B"
+
+  - name: predictor_checkpoint
+    type: json
+    required: false
+    default: null
+    description: "Fine-tuned predictor checkpoint (from Custom DNN model_artifact). If null, uses pre-trained weights."
+
+  - name: aggregation_threshold
+    type: float
+    required: false
+    default: 0.5
+    description: "Aggregation risk score threshold for flagging (0–1)."
+
+outputs:
+  - name: predictions
+    type: json
+    description: >
+      Per-sequence property scores: {id, affinity_dG, tm_celsius,
+      aggregation_risk, immunogenicity_risk, developability_flags}.
+
+  - name: ranking
+    type: json
+    description: "Sequences ranked by composite developability score."
+
+  - name: embeddings
+    type: json
+    description: "Per-residue ESM-2 embeddings (pass to Custom DNN for fine-tuning)."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 600
