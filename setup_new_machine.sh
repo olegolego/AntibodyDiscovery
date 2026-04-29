@@ -7,22 +7,45 @@ echo "Setting up from: $REPO_DIR"
 
 # ── Check prerequisites ────────────────────────────────────────────────────────
 check() { command -v "$1" &>/dev/null || { echo "✗ $1 not found — install it first"; exit 1; }; echo "✓ $1"; }
-check python3
 check node
 check npm
 check git
 
-PYTHON_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-echo "  Python $PYTHON_VER"
+# Find a Python >= 3.10
+PYTHON=""
+for candidate in python3.12 python3.11 python3.10 python3; do
+  if command -v "$candidate" &>/dev/null; then
+    VER=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null)
+    MAJOR=$(echo "$VER" | cut -d. -f1)
+    MINOR=$(echo "$VER" | cut -d. -f2)
+    if [ "$MAJOR" -ge 3 ] && [ "$MINOR" -ge 10 ]; then
+      PYTHON="$candidate"
+      break
+    fi
+  fi
+done
+
+if [ -z "$PYTHON" ]; then
+  echo ""
+  echo "✗ Python 3.10 or newer is required but not found."
+  echo ""
+  echo "  Install it with Homebrew:"
+  echo "    brew install python@3.12"
+  echo ""
+  echo "  Then re-run this script."
+  exit 1
+fi
+
+echo "✓ $PYTHON ($("$PYTHON" --version))"
 NODE_VER=$(node --version)
-echo "  Node $NODE_VER"
+echo "✓ node $NODE_VER"
 
 # ── Backend venv ──────────────────────────────────────────────────────────────
 echo ""
 echo "Setting up backend..."
 cd "$REPO_DIR/backend"
 if [ ! -d ".venv" ]; then
-  python3 -m venv .venv
+  "$PYTHON" -m venv .venv
 fi
 source .venv/bin/activate
 pip install --upgrade pip -q
