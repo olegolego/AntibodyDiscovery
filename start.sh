@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Start all servers: backend, frontend, and AbMAP.
+# Binds to 0.0.0.0 so the app is reachable from other machines on the network.
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# ── Detect local IP (first non-loopback IPv4) ─────────────────────────────────
+HOST_IP=$(ipconfig getifaddr en0 2>/dev/null \
+  || ip route get 1 2>/dev/null | awk '{print $7; exit}' \
+  || echo "localhost")
 
 # ── Kill any existing processes on known ports ────────────────────────────────
 echo "Stopping existing processes..."
@@ -18,13 +24,15 @@ ABMAP_PID=$!
 echo "Starting backend (port 8000)..."
 cd "$REPO_DIR/backend"
 source .venv/bin/activate
-uvicorn app.main:app --reload --port 8000 > /tmp/backend.log 2>&1 &
+# --host 0.0.0.0 makes it reachable from other machines
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
 echo "Starting frontend (port 5173)..."
 cd "$REPO_DIR/frontend"
-npm run dev > /tmp/frontend.log 2>&1 &
+# --host exposes vite on the network; VITE_API_HOST tells the app where the backend is
+VITE_API_HOST="http://$HOST_IP:8000" npm run dev -- --host 0.0.0.0 > /tmp/frontend.log 2>&1 &
 FRONTEND_PID=$!
 
 # ── Wait for all to be ready ──────────────────────────────────────────────────
@@ -43,11 +51,14 @@ for i in $(seq 1 20); do
 done
 
 echo ""
-echo "═══════════════════════════════════════"
-printf "  Backend   http://localhost:8000  %s\n" "$([ $BACKEND_OK -eq 1 ] && echo '✓' || echo '✗ (check /tmp/backend.log)')"
-printf "  Frontend  http://localhost:5173  %s\n" "$([ $FRONTEND_OK -eq 1 ] && echo '✓' || echo '✗ (check /tmp/frontend.log)')"
-printf "  AbMAP     http://localhost:8005  %s\n" "$([ $ABMAP_OK -eq 1 ] && echo '✓' || echo '✗ (check /tmp/abmap.log)')"
-echo "═══════════════════════════════════════"
+echo "═══════════════════════════════════════════════════"
+printf "  Backend   http://%-22s %s\n" "$HOST_IP:8000" "$([ $BACKEND_OK -eq 1 ] && echo '✓' || echo '✗ check /tmp/backend.log')"
+printf "  Frontend  http://%-22s %s\n" "$HOST_IP:5173" "$([ $FRONTEND_OK -eq 1 ] && echo '✓' || echo '✗ check /tmp/frontend.log')"
+printf "  AbMAP     http://%-22s %s\n" "$HOST_IP:8005" "$([ $ABMAP_OK -eq 1 ] && echo '✓' || echo '✗ check /tmp/abmap.log')"
+echo "═══════════════════════════════════════════════════"
+echo ""
+echo "  Open on this machine:      http://localhost:5173"
+echo "  Open from other machines:  http://$HOST_IP:5173"
 echo ""
 echo "PIDs: backend=$BACKEND_PID  frontend=$FRONTEND_PID  abmap=$ABMAP_PID"
 echo "Logs: /tmp/backend.log  /tmp/frontend.log  /tmp/abmap.log"
