@@ -265,6 +265,110 @@ function HADDOCK3View({ data }: { data: NodeAnalysis }) {
   );
 }
 
+// ── EquiDock: docked complex viewer + metadata table ─────────────────────────
+
+const EQUIDOCK_METRICS: { key: string; label: string; hint: string; format?: (v: unknown) => string }[] = [
+  { key: "ligand_residues",        label: "Ligand residues",       hint: "number of antibody residues docked" },
+  { key: "translation_magnitude_A",label: "Translation",           hint: "Å",   format: (v) => `${Number(v).toFixed(2)} Å` },
+  { key: "dataset",                label: "Model checkpoint",       hint: "dips = 8-layer general · db5 = 5-layer Ab/Ag" },
+  { key: "remove_clashes",         label: "Clash removal",         hint: "gradient-descent post-processing", format: (v) => v ? "enabled" : "disabled" },
+];
+
+function EquiDockView({ data }: { data: NodeAnalysis }) {
+  const meta = data.plddt as unknown as Record<string, unknown> | null;
+
+  function downloadPdb() {
+    if (!data.structure) return;
+    const blob = new Blob([data.structure], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "equidock_complex.pdb";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="pt-4 flex flex-col gap-5">
+      {/* Metadata table */}
+      {meta && Object.keys(meta).length > 0 && (
+        <div className="border border-border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-border bg-surface2 flex items-center justify-between">
+            <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
+              Docking Summary
+            </span>
+            <span className="text-[10px] text-orange-400 font-semibold uppercase tracking-wider">
+              EquiDock · SE(3)-equivariant
+            </span>
+          </div>
+          <table className="w-full text-xs">
+            <tbody>
+              {EQUIDOCK_METRICS.map(({ key, label, hint, format }) => {
+                const val = meta[key];
+                if (val === undefined || val === null) return null;
+                return (
+                  <tr key={key} className="border-b border-border/50 hover:bg-white/[0.02]">
+                    <td className="px-4 py-2.5 text-slate-400 font-medium w-44">{label}</td>
+                    <td className="px-4 py-2.5 font-mono text-white font-semibold">
+                      {format ? format(val) : String(val)}
+                    </td>
+                    <td className="px-4 py-2.5 text-slate-600 text-[11px]">{hint}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Stat cards */}
+      {meta && (
+        <div className="grid grid-cols-3 gap-3">
+          <StatCard
+            label="Ligand Residues"
+            value={meta.ligand_residues != null ? String(meta.ligand_residues) : "—"}
+            sub="antibody residues"
+          />
+          <StatCard
+            label="Translation"
+            value={meta.translation_magnitude_A != null ? `${Number(meta.translation_magnitude_A).toFixed(1)} Å` : "—"}
+            sub="rigid body shift"
+          />
+          <StatCard
+            label="Checkpoint"
+            value={meta.dataset ? String(meta.dataset).toUpperCase() : "—"}
+            sub={meta.dataset === "dips" ? "8-layer · general" : "5-layer · Ab/Ag"}
+          />
+        </div>
+      )}
+
+      {/* Download + complex viewer */}
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
+          Docked Complex
+        </span>
+        {data.structure && (
+          <button
+            onClick={downloadPdb}
+            className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors font-medium px-3 py-1 rounded-lg border border-indigo-500/30 hover:border-indigo-400/50 hover:bg-indigo-500/10"
+          >
+            Download PDB
+          </button>
+        )}
+      </div>
+      <div className="border border-border rounded-xl overflow-hidden" style={{ height: 500 }}>
+        {data.structure ? (
+          <StructureViewer pdbText={data.structure} />
+        ) : (
+          <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+            No complex structure available
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main panel ───────────────────────────────────────────────────────────────
 
 export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
@@ -287,6 +391,7 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
 
   const isImmuneBuilder = toolId === "immunebuilder";
   const isHaddock       = toolId === "haddock3";
+  const isEquiDock      = toolId === "equidock";
 
   const availableModels = modelQueries
     .map((q, i) => ({ index: i, data: q.data }))
@@ -297,21 +402,25 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
   const isLoading = isImmuneBuilder
     ? modelQueries.every((q) => q.isLoading)
     : singleQuery.isLoading;
-  const hasError = !isLoading && !isImmuneBuilder && activeData == null && !availableModels.length;
+  const hasError = !isLoading && !isImmuneBuilder && activeData == null && !availableModels.length && !isEquiDock;
 
   const headerTitle = isImmuneBuilder
     ? "ImmuneBuilder — Structure Predictions"
     : isHaddock
       ? "HADDOCK3 — Docking Results"
-      : (activeData?.plddt as unknown as { gene?: string })?.gene
-        ? `${(activeData?.plddt as unknown as { gene: string }).gene} — AlphaFold Analysis`
-        : "Structure Analysis";
+      : isEquiDock
+        ? "EquiDock — Rigid Docking"
+        : (activeData?.plddt as unknown as { gene?: string })?.gene
+          ? `${(activeData?.plddt as unknown as { gene: string }).gene} — AlphaFold Analysis`
+          : "Structure Analysis";
 
   const headerSub = isImmuneBuilder
     ? `ABodyBuilder2 / NanoBodyBuilder2 · ${availableModels.length} model(s)`
     : isHaddock
       ? "Antibody–antigen complex · top cluster scores"
-      : (activeData?.plddt as unknown as { organism?: string })?.organism;
+      : isEquiDock
+        ? "SE(3)-equivariant neural docking · ICLR 2022"
+        : (activeData?.plddt as unknown as { organism?: string })?.organism;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
@@ -358,7 +467,10 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
           {isHaddock && activeData && (
             <HADDOCK3View data={activeData} />
           )}
-          {!isImmuneBuilder && !isHaddock && activeData && (
+          {isEquiDock && activeData && (
+            <EquiDockView data={activeData} />
+          )}
+          {!isImmuneBuilder && !isHaddock && !isEquiDock && activeData && (
             <ModelContent data={activeData} />
           )}
         </div>

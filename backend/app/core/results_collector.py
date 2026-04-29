@@ -100,22 +100,25 @@ async def _collect_structure(
 
 
 async def _collect_docking(
-    run: Run, node_id: str, inputs: dict, outputs: dict, molecule_id: str | None
+    run: Run, node_id: str, tool_id: str, inputs: dict, outputs: dict, molecule_id: str | None
 ) -> None:
     best = outputs.get("best_complex")
-    scores = outputs.get("scores")
     if not best:
         return
     antigen = inputs.get("antigen") or inputs.get("receptor") or ""
     antigen_label = "spike_rbd" if len(antigen) > 100 else (antigen[:40] or "unknown")
+    scores = outputs.get("scores")
+    meta = outputs.get("metadata")
     async with AsyncSessionLocal() as db:
         row = DockingResultRow(
             molecule_id=molecule_id,
+            tool_id=tool_id,
             antigen_label=antigen_label,
             run_id=run.id,
             node_id=node_id,
             best_complex_pdb=best,
             scores=json.dumps(scores) if scores else None,
+            extra_data=json.dumps(meta) if meta else None,
         )
         db.add(row)
         await db.commit()
@@ -188,7 +191,7 @@ async def collect(
         elif tool_id in _STRUCTURE_TOOLS:
             await _collect_structure(run, node_id, tool_id, inputs, outputs, molecule_id)
         elif tool_id in ("haddock3", "equidock"):
-            await _collect_docking(run, node_id, inputs, outputs, molecule_id)
+            await _collect_docking(run, node_id, tool_id, inputs, outputs, molecule_id)
         elif tool_id in _DESIGN_TOOLS:
             await _collect_design(run, node_id, tool_id, outputs, molecule_id)
         elif tool_id in _EMBEDDING_TOOLS:

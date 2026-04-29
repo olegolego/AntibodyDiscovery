@@ -13,10 +13,25 @@ from app.tools.registry import tool_registry
 _TOOLS_DIR = Path(__file__).parent.parent.parent / "tools"
 
 
+async def _migrate(conn) -> None:
+    """Add columns introduced after initial schema creation."""
+    await conn.run_sync(Base.metadata.create_all)
+    # Add new columns to docking_results if they don't exist yet
+    for col in ("tool_id TEXT", "extra_data TEXT"):
+        try:
+            await conn.execute(
+                __import__("sqlalchemy").text(
+                    f"ALTER TABLE docking_results ADD COLUMN {col}"
+                )
+            )
+        except Exception:
+            pass  # column already exists
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await _migrate(conn)
     tool_registry.load()
     yield
     await engine.dispose()

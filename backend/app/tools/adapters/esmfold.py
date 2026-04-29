@@ -4,14 +4,22 @@ from app.config import settings
 from app.models.tool_spec import ToolSpec
 from app.tools.base import RunContext
 from app.tools.http_tool import post_with_retry
+from app.tools.molecule_cache import MoleculeResultCache
 
 
 class ESMFoldAdapter:
     def __init__(self, spec: ToolSpec) -> None:
         self.spec = spec
+        self._cache = MoleculeResultCache(tool_id="esmfold", tool_version=spec.version)
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
         sequence: str = str(inputs["sequence"]).strip()
+
+        cached = await self._cache.get({"sequence": sequence})
+        if cached is not None:
+            await run_ctx.alog(f"Cache hit — ESMFold (len={len(sequence)})")
+            return cached
+
         await run_ctx.alog(f"Submitting sequence (len={len(sequence)}) to ESMFold at {settings.esmfold_url}")
 
         data = await post_with_retry(
@@ -24,7 +32,10 @@ class ESMFoldAdapter:
         )
 
         await run_ctx.alog("ESMFold prediction complete")
-        return {
+        outputs = {
             "structure": data["pdb"],
             "plddt": data.get("plddt"),
         }
+        await self._cache.put({"sequence": sequence}, outputs,
+                              run_id=run_ctx.run_id, node_id=run_ctx.node_id)
+        return outputs

@@ -82,7 +82,7 @@ class StructureRow(Base):
 
 
 class DockingResultRow(Base):
-    """HADDOCK3 docking result, linked to the antibody structure that was docked."""
+    """Docking result from HADDOCK3 or EquiDock, linked to the antibody molecule."""
     __tablename__ = "docking_results"
 
     id: Mapped[str] = mapped_column(
@@ -90,11 +90,13 @@ class DockingResultRow(Base):
     )
     antibody_structure_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     molecule_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    tool_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     antigen_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
     run_id: Mapped[str] = mapped_column(String(36), nullable=False)
     node_id: Mapped[str] = mapped_column(String(64), nullable=False)
     best_complex_pdb: Mapped[str | None] = mapped_column(Text, nullable=True)
-    scores: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON
+    scores: Mapped[str | None] = mapped_column(Text, nullable=True)      # JSON — HADDOCK scores
+    extra_data: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON — EquiDock metadata
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (Index("ix_docking_molecule", "molecule_id"),)
@@ -130,3 +132,60 @@ class EmbeddingRow(Base):
     tool_id: Mapped[str] = mapped_column(String(64), nullable=False)
     embedding_meta: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON (non-vector metadata)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ToolCacheRow(Base):
+    """Unified result cache for all tools, keyed by inputs_hash + queryable by molecule_key.
+
+    molecule_key = MoleculeKey(vh, vl).primary() when the tool receives sequence inputs.
+    Null for tools whose inputs are PDB blobs with no sequence context.
+    """
+    __tablename__ = "tool_cache"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    tool_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    inputs_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    molecule_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    inputs_preview: Mapped[str | None] = mapped_column(Text, nullable=True)   # JSON
+    outputs_json: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_tool_cache_lookup", "tool_id", "inputs_hash"),
+        Index("ix_tool_cache_molecule", "molecule_key", "tool_id"),
+    )
+
+
+class AbMAPEmbeddingRow(Base):
+    """Full AbMAP embedding result keyed by (VH, VL) pair via MoleculeKey.primary().
+
+    molecule_key = MoleculeKey(vh, vl).primary() — stable 64-char SHA-256 hex.
+    All queries from the Results page use this key, not run_id or node_id.
+    Multiple embeddings for the same molecule can exist (different chain_type / task).
+    """
+    __tablename__ = "abmap_embeddings"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    molecule_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    heavy_chain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    light_chain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    chain_type: Mapped[str] = mapped_column(String(4), nullable=False)
+    task: Mapped[str] = mapped_column(String(32), nullable=False)
+    embedding_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    num_mutations: Mapped[int] = mapped_column(nullable=False, default=10)
+    embedding_json: Mapped[str] = mapped_column(Text, nullable=False)   # JSON list of floats
+    embedding_shape: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sequence_length: Mapped[int | None] = mapped_column(nullable=True)
+    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_abmap_molecule_key", "molecule_key"),
+        Index("ix_abmap_molecule_params", "molecule_key", "chain_type", "task", "embedding_type", "num_mutations"),
+    )

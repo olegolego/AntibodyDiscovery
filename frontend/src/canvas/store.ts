@@ -43,6 +43,7 @@ function nodeType(toolId: string): string {
   if (toolId === "target_input")    return "targetInputNode";
   if (toolId === "immunebuilder")   return "immunebuilderNode";
   if (toolId === "haddock3")        return "haddock3Node";
+  if (toolId === "equidock")        return "equidockNode";
   if (toolId === "compute")         return "computeNode";
   return "toolNode";
 }

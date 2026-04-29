@@ -37,7 +37,7 @@ from app.tools.registry import _SENTINEL_PREFIX
 from app.tools.subprocess_runner import kill_subprocess
 from app.workers.tasks import dispatch_tool
 
-_ANALYSIS_TOOLS = {"alphafold_monomer", "esmfold", "immunebuilder", "haddock3"}
+_ANALYSIS_TOOLS = {"alphafold_monomer", "esmfold", "immunebuilder", "haddock3", "equidock"}
 _cancelled_runs: set[str] = set()
 
 
@@ -210,6 +210,12 @@ async def execute_run(run_id: str) -> None:
                 if struct:
                     await _save_analysis(run.id, node_id, node.tool,
                                          {"structure": struct, "plddt": scores})
+            elif node.tool == "equidock":
+                struct = outputs.get("best_complex")
+                meta = outputs.get("metadata") or {}
+                if struct:
+                    await _save_analysis(run.id, node_id, node.tool,
+                                         {"structure": struct, "plddt": meta})
             elif node.tool == "immunebuilder":
                 error_estimates = outputs.get("error_estimates") or []
                 for i in range(1, 5):

@@ -5,7 +5,7 @@ from typing import Any
 
 from app.models.tool_spec import ToolSpec
 from app.tools.base import RunContext
-from app.tools.cache import ToolCache
+from app.tools.molecule_cache import MoleculeResultCache
 
 _AA = set("ACDEFGHIKLMNPQRSTVWY")
 _MIN_VH_LENGTH = 80
@@ -24,7 +24,7 @@ def _clean_sequence(raw: str) -> str:
 class ImmuneBuilderAdapter:
     def __init__(self, spec: ToolSpec) -> None:
         self.spec = spec
-        self._cache = ToolCache(tool_id="immunebuilder", tool_version=spec.version)
+        self._cache = MoleculeResultCache(tool_id="immunebuilder", tool_version=spec.version)
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
         heavy_raw = inputs.get("heavy_chain", "")
@@ -43,7 +43,7 @@ class ImmuneBuilderAdapter:
             "light_chain": light,
             "num_models": max(1, min(4, int(inputs.get("num_models", 4)))),
         }
-        cached = self._cache.get(cache_inputs)
+        cached = await self._cache.get(cache_inputs)
         if cached is not None:
             run_ctx.log("Cache hit — returning stored ImmuneBuilder result")
             return cached
@@ -162,5 +162,5 @@ class ImmuneBuilderAdapter:
         outputs["error_estimates"] = error_estimates
         run_ctx.log(f"Done — {num_models} model(s), mean RMSD {mean_rmsd:.4f} Å")
 
-        self._cache.put(cache_inputs, outputs)
+        await self._cache.put(cache_inputs, outputs, run_id=run_ctx.run_id, node_id=run_ctx.node_id)
         return outputs
