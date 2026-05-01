@@ -37,7 +37,7 @@ class AlphaFoldAdapter:
         if not uniprot_id:
             raise ValueError("uniprot_id is required for AlphaFold EBI lookup")
 
-        run_ctx.log(f"Querying EBI AlphaFold database for {uniprot_id}…")
+        await run_ctx.alog(f"Querying EBI AlphaFold database for {uniprot_id}…")
 
         async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
             resp = await client.get(f"{EBI_BASE}/prediction/{uniprot_id}")
@@ -50,17 +50,17 @@ class AlphaFoldAdapter:
                 raise ValueError(f"Empty prediction list for {uniprot_id}")
             meta = predictions[0]
 
-            run_ctx.log(
+            await run_ctx.alog(
                 f"Found: {meta.get('uniprotDescription', uniprot_id)} "
                 f"({meta.get('organismScientificName', 'unknown')})"
             )
 
-            run_ctx.log("Downloading PDB structure…")
+            await run_ctx.alog("Downloading PDB structure…")
             pdb_resp = await client.get(meta["pdbUrl"])
             pdb_resp.raise_for_status()
             pdb_text = pdb_resp.text
 
-            run_ctx.log("Downloading PAE matrix…")
+            await run_ctx.alog("Downloading PAE matrix…")
             pae_resp = await client.get(meta["paeDocUrl"])
             pae_resp.raise_for_status()
             pae_raw = pae_resp.json()
@@ -72,7 +72,7 @@ class AlphaFoldAdapter:
         high_conf_pct = 100 * sum(1 for v in plddt_scores if v >= 70) / n if n else 0.0
         very_high_pct = 100 * sum(1 for v in plddt_scores if v >= 90) / n if n else 0.0
 
-        run_ctx.log(
+        await run_ctx.alog(
             f"Done — {n} residues | mean pLDDT {mean_plddt:.1f} | "
             f"high-conf {high_conf_pct:.0f}% | very-high {very_high_pct:.0f}%"
         )

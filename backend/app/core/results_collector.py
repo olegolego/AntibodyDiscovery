@@ -156,6 +156,36 @@ async def _collect_embedding(
         await db.commit()
 
 
+async def _collect_gromacs_mmpbsa(
+    run: Run, node_id: str, tool_id: str, inputs: dict, outputs: dict, molecule_id: str | None
+) -> None:
+    """Store MM/GBSA binding affinity as a docking result row."""
+    dg = outputs.get("delta_g_bind")
+    if dg is None:
+        return
+    energy = outputs.get("energy_decomposition") or {}
+    convergence = outputs.get("md_convergence") or {}
+    scores = {
+        "delta_g_bind_kcal_mol": dg,
+        **{k: v for k, v in energy.items() if v is not None},
+    }
+    antigen = inputs.get("complex_pdb") or ""
+    antigen_label = f"gromacs_complex_{node_id[:8]}"
+    async with AsyncSessionLocal() as db:
+        row = DockingResultRow(
+            molecule_id=molecule_id,
+            tool_id=tool_id,
+            antigen_label=antigen_label,
+            run_id=run.id,
+            node_id=node_id,
+            best_complex_pdb=None,
+            scores=json.dumps(scores),
+            extra_data=json.dumps(convergence),
+        )
+        db.add(row)
+        await db.commit()
+
+
 # ── Public entry point ────────────────────────────────────────────────────────
 
 _STRUCTURE_TOOLS = {"immunebuilder", "esmfold", "alphafold_monomer"}
@@ -192,6 +222,8 @@ async def collect(
             await _collect_structure(run, node_id, tool_id, inputs, outputs, molecule_id)
         elif tool_id in ("haddock3", "equidock"):
             await _collect_docking(run, node_id, tool_id, inputs, outputs, molecule_id)
+        elif tool_id == "gromacs_mmpbsa":
+            await _collect_gromacs_mmpbsa(run, node_id, tool_id, inputs, outputs, molecule_id)
         elif tool_id in _DESIGN_TOOLS:
             await _collect_design(run, node_id, tool_id, outputs, molecule_id)
         elif tool_id in _EMBEDDING_TOOLS:

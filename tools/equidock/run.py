@@ -28,8 +28,64 @@ _CKPT_DB5 = (
 )
 
 
+_MAX_RECEPTOR_RESIDUES = 600   # memory limit for EquiDock on CPU
+
+
 def _progress(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
+
+
+def _trim_pdb_to_best_chain(pdb_text: str, max_residues: int = _MAX_RECEPTOR_RESIDUES) -> str:
+    """
+    If the receptor has more than max_residues residues, extract the single chain
+    that is closest in size to the target range (50–max_residues).  Returns the
+    PDB text for that chain (ATOM records only).  Warns to stderr so the user
+    sees it in the terminal.
+    """
+    from collections import defaultdict
+    chains: dict[str, list[str]] = defaultdict(list)
+    residues_per_chain: dict[str, set] = defaultdict(set)
+
+    for line in pdb_text.splitlines():
+        if line.startswith("ATOM"):
+            chain = line[21] if len(line) > 21 else " "
+            try:
+                res_num = int(line[22:26])
+            except ValueError:
+                res_num = 0
+            chains[chain].append(line)
+            residues_per_chain[chain].add(res_num)
+
+    total_residues = sum(len(v) for v in residues_per_chain.values())
+    if total_residues <= max_residues:
+        return pdb_text
+
+    _progress(
+        f"⚠ Receptor has ~{total_residues} residues — EquiDock is limited to "
+        f"{max_residues} to avoid OOM. Auto-selecting best chain."
+    )
+
+    # Pick the chain with most residues that is ≤ max_residues; else pick smallest
+    candidates = sorted(residues_per_chain.items(), key=lambda x: len(x[1]), reverse=True)
+    chosen = None
+    for ch, res in candidates:
+        if len(res) <= max_residues:
+            chosen = ch
+            break
+    if chosen is None:
+        # All chains are too big — use the smallest one and warn
+        chosen = min(residues_per_chain, key=lambda c: len(residues_per_chain[c]))
+        _progress(
+            f"⚠ All chains exceed {max_residues} residues. Using chain {chosen!r} "
+            f"({len(residues_per_chain[chosen])} res). Consider providing a binding domain only."
+        )
+
+    _progress(
+        f"→ Using receptor chain {chosen!r} "
+        f"({len(residues_per_chain[chosen])} residues, "
+        f"dropped {total_residues - len(residues_per_chain[chosen])} residues from other chains)"
+    )
+    return "\n".join(chains[chosen]) + "\nEND\n"
 
 
 # ── Functions inlined from inference_rigid.py (avoid module-level import side-effects) ──
@@ -91,6 +147,9 @@ def _run(inputs: dict) -> dict:
         raise ValueError("ligand PDB is required")
     if not receptor_pdb:
         raise ValueError("receptor PDB is required")
+
+    # Trim large receptors (multi-chain complexes, full spike, etc.) to avoid OOM
+    receptor_pdb = _trim_pdb_to_best_chain(receptor_pdb)
     if dataset not in ("dips", "db5"):
         raise ValueError("dataset must be 'dips' or 'db5'")
 

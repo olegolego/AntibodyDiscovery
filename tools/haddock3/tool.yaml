@@ -24,6 +24,15 @@ inputs:
       Antigen structure PDB. Residue numbers must match antigen_active_residues exactly — do not renumber.
       Default: SARS-CoV-2 spike RBD (chain B, residues 319–541). Typically wired from Target Input.
 
+  - name: antigen_chains
+    type: str
+    required: false
+    default: ""
+    description: >
+      Comma-separated chain IDs to extract from the antigen PDB (e.g. "A" or "A,C").
+      If empty, the first protein chain is used automatically.
+      For multi-chain antigens, active_residues must be on the first listed chain.
+
   - name: antigen_active_residues
     type: str
     required: true

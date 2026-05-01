@@ -52,6 +52,8 @@ export interface Pipeline {
   schema_version: string;
   nodes: PipelineNode[];
   edges: PipelineEdge[];
+  created_at?: string;
+  updated_at?: string;
 }
 
 export type NodeRunStatus =
@@ -80,6 +82,8 @@ export interface NodeRun {
 export interface Run {
   id: string;
   pipeline_id: string;
+  pipeline_snapshot: Record<string, unknown>;
   status: RunStatus;
   nodes: Record<string, NodeRun>;
+  created_at?: string;
 }

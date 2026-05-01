@@ -13,8 +13,23 @@ class AbMAPAdapter:
         self.spec = spec
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
-        sequence      = str(inputs["sequence"]).strip()
-        chain_type    = str(inputs.get("chain_type", "H")).upper()
+        # Accept "sequence" directly or heavy_chain/light_chain from sequence_input's generic out handle
+        raw = inputs.get("sequence") or inputs.get("heavy_chain") or inputs.get("light_chain") or ""
+        if isinstance(raw, list):
+            raw = raw[0] if raw else ""
+        sequence = str(raw).strip()
+        if not sequence:
+            raise ValueError("AbMAP requires a sequence input (sequence, heavy_chain, or light_chain)")
+
+        # ProteinMPNN uses '/' as chain separator and 'X' for masked/unusual residues
+        if "/" in sequence:
+            sequence = sequence.split("/")[0]
+        if "X" in sequence:
+            sequence = sequence.replace("X", "A")
+
+        default_chain = "H" if inputs.get("heavy_chain") and not inputs.get("sequence") else (
+                        "L" if inputs.get("light_chain") and not inputs.get("sequence") else "H")
+        chain_type    = str(inputs.get("chain_type", default_chain)).upper()
         task          = str(inputs.get("task", "structure"))
         embedding_type = str(inputs.get("embedding_type", "fixed"))
         num_mutations = int(inputs.get("num_mutations", 10))
@@ -45,20 +60,26 @@ class AbMAPAdapter:
             return cached
 
         # ── Call AbMAP server ─────────────────────────────────────────────────
-        data = await post_with_retry(
-            settings.abmap_url,
-            "/embed",
-            {
-                "sequence":       sequence,
-                "chain_type":     chain_type,
-                "task":           task,
-                "embedding_type": embedding_type,
-                "num_mutations":  num_mutations,
-            },
-            tool_name="AbMAP",
-            timeout=1800,
-            on_log=run_ctx.alog,
-        )
+        try:
+            data = await post_with_retry(
+                settings.abmap_url,
+                "/embed",
+                {
+                    "sequence":       sequence,
+                    "chain_type":     chain_type,
+                    "task":           task,
+                    "embedding_type": embedding_type,
+                    "num_mutations":  num_mutations,
+                },
+                tool_name="AbMAP",
+                timeout=1800,
+                on_log=run_ctx.alog,
+            )
+        except RuntimeError as exc:
+            # AbMAP failures are non-fatal — bad CDR numbering, server hiccup, etc.
+            # Log a warning and return an empty result so the pipeline continues.
+            await run_ctx.alog(f"⚠ AbMAP skipped: {exc}")
+            return {"embedding": [], "metadata": {"error": str(exc), "skipped": True}}
 
         result = {
             "embedding": data["embedding"],

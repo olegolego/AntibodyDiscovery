@@ -10,14 +10,16 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 
 import { useCanvasStore } from "./store";
-import { ToolNode, SequenceInputNode, TargetInputNode, ImmuneBuilderNode, HADDOCK3Node, EquiDockNode, ComputeNode } from "./NodeRenderer";
+import { ToolNode, SequenceInputNode, SequenceDbNode, TargetInputNode, ImmuneBuilderNode, MegaDockNode, HADDOCK3Node, EquiDockNode, ComputeNode } from "./NodeRenderer";
 import type { ToolSpec } from "@/types";
 
 const NODE_TYPES = {
   toolNode: ToolNode,
   sequenceInputNode: SequenceInputNode,
+  sequenceDbNode: SequenceDbNode,
   targetInputNode: TargetInputNode,
   immunebuilderNode: ImmuneBuilderNode,
+  megadockNode: MegaDockNode,
   haddock3Node: HADDOCK3Node,
   equidockNode: EquiDockNode,
   computeNode: ComputeNode,

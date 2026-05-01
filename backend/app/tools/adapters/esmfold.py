@@ -13,7 +13,13 @@ class ESMFoldAdapter:
         self._cache = MoleculeResultCache(tool_id="esmfold", tool_version=spec.version)
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
-        sequence: str = str(inputs["sequence"]).strip()
+        raw = inputs.get("sequence") or inputs.get("heavy_chain") or inputs.get("light_chain") or ""
+        # ProteinMPNN outputs a list — take the best (first) sequence
+        if isinstance(raw, list):
+            raw = raw[0] if raw else ""
+        sequence: str = str(raw).strip()
+        if not sequence:
+            raise ValueError("ESMFold requires a sequence input (sequence, heavy_chain, or light_chain)")
 
         cached = await self._cache.get({"sequence": sequence})
         if cached is not None:

@@ -5,7 +5,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import analysis, artifacts, compute, pipelines, results, runs, tools, ws
+from app.api import analysis, artifacts, compute, pipelines, results, runs, sequences, tools, ws
+from app.config import settings
 from app.db.models import Base
 from app.db.session import engine
 from app.tools.registry import tool_registry
@@ -37,11 +38,11 @@ async def lifespan(app: FastAPI):
     await engine.dispose()
 
 
-app = FastAPI(title="Protein Design Platform API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Protein Design Platform API", version="0.1.0", lifespan=lifespan, redirect_slashes=False)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=settings.cors_allowed_origins.split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -53,6 +54,7 @@ app.include_router(runs.router, prefix="/api/runs", tags=["runs"])
 app.include_router(artifacts.router, prefix="/api/artifacts", tags=["artifacts"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 app.include_router(results.router, prefix="/api/results", tags=["results"])
+app.include_router(sequences.router, prefix="/api/sequences", tags=["sequences"])
 app.include_router(ws.router, prefix="/ws", tags=["ws"])
 app.include_router(compute.router, prefix="/ws/compute", tags=["compute"])
 

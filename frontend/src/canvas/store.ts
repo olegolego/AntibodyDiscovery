@@ -9,7 +9,9 @@ import {
   type NodeChange,
 } from "reactflow";
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type { NodeRunStatus, Pipeline, PipelineNode, ToolSpec } from "@/types";
+import { randomUUID } from "@/utils";
 
 export interface NodeData {
   tool: ToolSpec;
@@ -32,6 +34,7 @@ interface CanvasState {
   setRunNodeStatuses: (statuses: Record<string, NodeRunStatus>) => void;
   setRunNodeOutputs: (outputs: Record<string, Record<string, unknown>>) => void;
   clearRunStatuses: () => void;
+  resetCanvas: () => void;
   loadPipeline: (pipeline: Pipeline, tools: ToolSpec[]) => void;
   toPipeline: (name: string) => Pipeline;
 }
@@ -40,8 +43,10 @@ let _nodeCounter = 0;
 
 function nodeType(toolId: string): string {
   if (toolId === "sequence_input")  return "sequenceInputNode";
+  if (toolId === "sequence_db")     return "sequenceDbNode";
   if (toolId === "target_input")    return "targetInputNode";
   if (toolId === "immunebuilder")   return "immunebuilderNode";
+  if (toolId === "megadock")        return "megadockNode";
   if (toolId === "haddock3")        return "haddock3Node";
   if (toolId === "equidock")        return "equidockNode";
   if (toolId === "compute")         return "computeNode";
@@ -76,7 +81,7 @@ function fallbackHandle(
   return portNames[0] ?? (kind === "source" ? "out" : "in");
 }
 
-export const useCanvasStore = create<CanvasState>((set, get) => ({
+export const useCanvasStore = create<CanvasState>()(persist((set, get) => ({
   nodes: [],
   edges: [],
   selectedNodeId: null,
@@ -129,6 +134,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   setRunNodeStatuses: (statuses) => set({ runNodeStatuses: statuses }),
   setRunNodeOutputs: (outputs) => set({ runNodeOutputs: outputs }),
   clearRunStatuses: () => set({ runNodeStatuses: {}, runNodeOutputs: {} }),
+  resetCanvas: () => { _nodeCounter = 0; set({ nodes: [], edges: [], runNodeStatuses: {}, runNodeOutputs: {} }); },
 
   loadPipeline: (pipeline, tools) => {
     const toolMap = new Map(tools.map((t) => [t.id, t]));
@@ -166,7 +172,7 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
       return { id: n.id, tool: d.tool.id, params: d.params, position: n.position };
     });
     return {
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       name,
       schema_version: "1",
       nodes: pipelineNodes,
@@ -175,5 +181,15 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
         target: `${e.target}.${fallbackHandle(nodes, e.target, "target", e.targetHandle)}`,
       })),
     };
+  },
+}), {
+  name: "pdp_canvas",
+  partialize: (state) => ({ nodes: state.nodes, edges: state.edges }),
+  onRehydrateStorage: () => (state) => {
+    if (!state?.nodes?.length) return;
+    _nodeCounter = state.nodes.reduce((max: number, n: Node) => {
+      const num = parseInt(n.id.split("_").pop() ?? "0", 10);
+      return isNaN(num) ? max : Math.max(max, num);
+    }, 0);
   },
 }));

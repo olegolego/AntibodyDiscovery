@@ -37,7 +37,7 @@ from app.tools.registry import _SENTINEL_PREFIX
 from app.tools.subprocess_runner import kill_subprocess
 from app.workers.tasks import dispatch_tool
 
-_ANALYSIS_TOOLS = {"alphafold_monomer", "esmfold", "immunebuilder", "haddock3", "equidock"}
+_ANALYSIS_TOOLS = {"alphafold_monomer", "esmfold", "immunebuilder", "haddock3", "equidock", "gromacs_mmpbsa"}
 _cancelled_runs: set[str] = set()
 
 
@@ -168,7 +168,7 @@ async def execute_run(run_id: str) -> None:
         # Python variables — don't filter to just the wired port.
         is_compute = node.tool == "compute"
 
-        for port, upstream_ref in upstream_outputs(node_id, pipeline.edges).items():
+        for port, upstream_ref in upstream_outputs(node_id, pipeline.edges):
             up_node, up_port = upstream_ref.split(".", 1)
             if up_node not in node_outputs:
                 continue
@@ -231,6 +231,14 @@ async def execute_run(run_id: str) -> None:
                                 },
                             }
                         )
+            elif node.tool == "gromacs_mmpbsa":
+                dg = outputs.get("delta_g_bind")
+                if dg is not None:
+                    await _save_analysis(run.id, node_id, node.tool, {
+                        "delta_g_bind": dg,
+                        "energy_decomposition": outputs.get("energy_decomposition") or {},
+                        "md_convergence": outputs.get("md_convergence") or {},
+                    })
             elif "structure" in outputs or "plddt" in outputs:
                 await _save_analysis(run.id, node_id, node.tool, outputs)
 

@@ -10,5 +10,5 @@ class EchoAdapter:
         self.spec = spec
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
-        run_ctx.log(f"echo: received inputs: {list(inputs.keys())}")
+        await run_ctx.alog(f"echo: received inputs: {list(inputs.keys())}")
         return inputs

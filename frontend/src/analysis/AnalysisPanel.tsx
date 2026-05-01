@@ -4,7 +4,6 @@ import { fetchNodeAnalysis, type NodeAnalysis } from "@/api/analysis";
 import { StructureViewer } from "./StructureViewer";
 import { PLDDTChart } from "./PLDDTChart";
 import { PAEHeatmap } from "./PAEHeatmap";
-import { RMSDChart } from "./RMSDChart";
 import { useState } from "react";
 
 interface Props {
@@ -153,46 +152,96 @@ function ModelContent({ data }: { data: NodeAnalysis }) {
   );
 }
 
-// ── ImmuneBuilder: 2×2 structure grid + RMSD plot ───────────────────────────
+// ── ImmuneBuilder: confidence chart (RMSD → confidence) ─────────────────────
+
+function rmsdToConfidence(rmsd: number[]): number[] {
+  // Map per-residue RMSD (Å) to 0–100 confidence: 0Å→100, 1Å→50, 2Å→0
+  return rmsd.map((v) => Math.max(0, Math.min(100, 100 - v * 50)));
+}
+
+import {
+  CartesianGrid, Line, LineChart, ReferenceLine,
+  ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from "recharts";
+
+function IbConfidenceChart({ rmsd }: { rmsd: number[] }) {
+  const confidence = rmsdToConfidence(rmsd);
+  const step = confidence.length > 500 ? Math.ceil(confidence.length / 500) : 1;
+  const data = confidence
+    .filter((_, i) => i % step === 0)
+    .map((v, i) => ({ res: i * step + 1, conf: parseFloat(v.toFixed(1)) }));
+
+  function confColor(v: number) {
+    if (v >= 85) return "#38bdf8";
+    if (v >= 60) return "#34d399";
+    if (v >= 40) return "#fbbf24";
+    return "#f87171";
+  }
+
+  const CustomDot = (props: { cx?: number; cy?: number; payload?: { conf: number } }) => {
+    const { cx = 0, cy = 0, payload } = props;
+    if (!payload) return null;
+    return <circle cx={cx} cy={cy} r={2} fill={confColor(payload.conf)} />;
+  };
+
+  return (
+    <ResponsiveContainer width="100%" height={140}>
+      <LineChart data={data} margin={{ top: 4, right: 8, bottom: 16, left: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#1e2d54" />
+        <XAxis dataKey="res" tick={{ fill: "#64748b", fontSize: 9 }}
+          label={{ value: "Residue", position: "insideBottom", offset: -4, fill: "#64748b", fontSize: 10 }} />
+        <YAxis domain={[0, 100]} tick={{ fill: "#64748b", fontSize: 9 }} width={28} />
+        <Tooltip
+          contentStyle={{ background: "#0e1425", border: "1px solid #1e2d54", borderRadius: 6, fontSize: 11 }}
+          labelStyle={{ color: "#94a3b8" }}
+          itemStyle={{ color: "#e2e8f0" }}
+          formatter={(v) => [`${Number(v).toFixed(1)}`, "Confidence"]}
+          labelFormatter={(l) => `Residue ${l}`}
+        />
+        <ReferenceLine y={85} stroke="#38bdf8" strokeDasharray="4 2" strokeOpacity={0.4} />
+        <ReferenceLine y={60} stroke="#34d399" strokeDasharray="4 2" strokeOpacity={0.4} />
+        <Line type="monotone" dataKey="conf" stroke="#a78bfa" strokeWidth={1.5}
+          dot={<CustomDot />} activeDot={{ r: 4 }} isAnimationActive={false} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ── ImmuneBuilder: 2×2 structure grid + per-model confidence ─────────────────
 
 function ImmuneBuilderGrid({ models }: { models: Array<{ index: number; data: NodeAnalysis | undefined | null }> }) {
-  // RMSD is per-ensemble, same for all models — read from the first available model
   const rmsd = (
     models.find((m) => m.data)?.data?.plddt as unknown as { per_residue_rmsd?: number[] } | null
   )?.per_residue_rmsd ?? [];
 
   return (
-    <div className="pt-4 flex flex-col gap-6">
+    <div className="pt-4 flex flex-col gap-4">
       <div className="grid grid-cols-2 gap-4">
         {models.map((m) => (
           <div key={m.index} className="flex flex-col gap-2">
             <span className="text-xs font-semibold text-violet-300">Model {m.index + 1}</span>
-            <div className="border border-border rounded-xl overflow-hidden" style={{ height: 260 }}>
+            <div className="border border-border rounded-xl overflow-hidden" style={{ height: 220 }}>
               {m.data?.structure
                 ? <StructureViewer pdbText={m.data.structure} />
                 : <div className="flex items-center justify-center h-full text-slate-500 text-xs">No structure</div>
               }
             </div>
+            {rmsd.length > 0 && (
+              <div className="border border-border rounded-xl p-3">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">
+                  Per-Residue Confidence
+                </div>
+                <IbConfidenceChart rmsd={rmsd} />
+                <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-600 px-1">
+                  <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-sky-400 inline-block" />≥ 85 very high</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-emerald-400 inline-block" />≥ 60 confident</span>
+                  <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-red-400 inline-block" />&lt; 40 uncertain</span>
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
-
-      {rmsd.length > 0 && (
-        <div className="border border-border rounded-xl p-4">
-          <div className="text-[11px] font-bold uppercase tracking-widest text-slate-500 mb-1">
-            Per-Residue RMSD (Å) — ensemble disagreement
-          </div>
-          <div className="text-[11px] text-slate-600 mb-3">
-            Lower = models agree (confident) · Higher = models disagree (flexible/uncertain)
-          </div>
-          <RMSDChart rmsd={rmsd} />
-          <div className="flex items-center gap-4 mt-2 text-[11px] text-slate-500 px-1">
-            <span className="flex items-center gap-1.5"><span className="w-2 h-0.5 bg-emerald-400 inline-block" /> &lt; 0.5 Å confident</span>
-            <span className="flex items-center gap-1.5"><span className="w-2 h-0.5 bg-amber-400 inline-block" /> 0.5–1.0 Å moderate</span>
-            <span className="flex items-center gap-1.5"><span className="w-2 h-0.5 bg-red-400 inline-block" /> &gt; 1.0 Å uncertain</span>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

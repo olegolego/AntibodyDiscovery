@@ -1,7 +1,9 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
-import { Code2 } from "lucide-react";
+import { BookOpen, Code2 } from "lucide-react";
 import { useCanvasStore, type NodeData } from "./store";
+import { SequencePickerModal } from "@/sequences/SequencePickerModal";
+import type { SequenceEntry } from "@/api/sequences";
 
 const CATEGORY_STYLE: Record<string, { border: string; label: string; glow: string }> = {
   input:                { border: "#fbbf24", label: "text-amber-300",   glow: "rgba(251,191,36,0.25)"  },
@@ -166,6 +168,101 @@ export function SequenceInputNode({ id, data, selected }: NodeProps<NodeData>) {
   );
 }
 
+// ── Sequence DB node — picks from library ───────────────────────────────────
+
+export function SequenceDbNode({ id, data, selected }: NodeProps<NodeData>) {
+  const runStatus = useCanvasStore((s) => s.runNodeStatuses[id]);
+  const updateNodeParams = useCanvasStore((s) => s.updateNodeParams);
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  const heavy = String(data.params.heavy_chain ?? "");
+  const light = String(data.params.light_chain ?? "");
+
+  function onSelect(entry: SequenceEntry) {
+    updateNodeParams(id, { ...data.params, heavy_chain: entry.heavy_chain, light_chain: entry.light_chain ?? "" });
+    setPickerOpen(false);
+  }
+
+  function preview(seq: string) {
+    if (!seq) return null;
+    return seq.length <= 16 ? seq : `${seq.slice(0, 8)}…${seq.slice(-6)}`;
+  }
+
+  return (
+    <>
+      <div
+        style={{
+          borderColor: "#fbbf24",
+          boxShadow: selected
+            ? "0 0 0 2px #fbbf2499, 0 4px 28px rgba(251,191,36,0.3)"
+            : "0 4px 20px rgba(251,191,36,0.2)",
+        }}
+        className={`bg-surface2 border-2 rounded-xl px-3.5 py-2.5 w-72
+          ${runStatus ? STATUS_RING[runStatus] ?? "" : ""}`}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between mb-2.5">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-300">Input · Library</div>
+            <div className="text-sm font-bold text-white">Sequence Library</div>
+          </div>
+          {runStatus && STATUS_DOT[runStatus] && (
+            <span className={`w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
+          )}
+        </div>
+
+        {/* VH display */}
+        <div className="flex flex-col gap-1 mb-2">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold text-amber-300 uppercase tracking-widest">VH · Heavy Chain</span>
+            <span className="text-[10px] text-slate-600">{heavy.length > 0 ? `${heavy.length} AA` : "—"}</span>
+          </div>
+          <div className="w-full bg-canvas border border-border rounded-lg px-2.5 py-2 text-xs font-mono
+            text-slate-400 min-h-[32px] truncate">
+            {preview(heavy) ?? <span className="text-slate-600">No sequence selected</span>}
+          </div>
+        </div>
+
+        {/* VL display */}
+        <div className="flex flex-col gap-1 mb-3">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold text-amber-300/60 uppercase tracking-widest">VL · Light Chain</span>
+            <span className="text-[10px] text-slate-600">{light.length > 0 ? `${light.length} AA` : "—"}</span>
+          </div>
+          <div className="w-full bg-canvas border border-border rounded-lg px-2.5 py-2 text-xs font-mono
+            text-slate-400 min-h-[32px] truncate">
+            {preview(light) ?? <span className="text-slate-600">—</span>}
+          </div>
+        </div>
+
+        {/* Pick button */}
+        <button
+          onClick={() => setPickerOpen(true)}
+          className="nodrag w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg
+            text-xs font-semibold border border-amber-500/40 text-amber-300
+            hover:bg-amber-500/10 hover:border-amber-400/60 transition-colors"
+        >
+          <BookOpen size={11} />
+          Pick from Library
+        </button>
+
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="out"
+          style={{ top: "50%", background: "#fbbf24" }}
+          title="heavy_chain, light_chain"
+          className="!w-3 !h-3 !border-2 !border-surface"
+        />
+      </div>
+
+      {pickerOpen && (
+        <SequencePickerModal onSelect={onSelect} onClose={() => setPickerOpen(false)} />
+      )}
+    </>
+  );
+}
+
 // ── ImmuneBuilder node — 4 ranked structure output handles ──────────────────
 
 const IB_HANDLES = [
@@ -234,6 +331,103 @@ export function ImmuneBuilderNode({ id, selected }: NodeProps<NodeData>) {
             id={h.id}
             style={{ top: h.top, background: ready ? "#34d399" : "#818cf8" }}
             title={`Model ${h.label}${ready ? " — ready" : ""}`}
+            className="!w-3 !h-3 !border-2 !border-surface"
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+// ── MEGADOCK node — named ligand/receptor inputs + N ranked complex outputs ──
+
+export function MegaDockNode({ id, data, selected }: NodeProps<NodeData>) {
+  const runStatus   = useCanvasStore((s) => s.runNodeStatuses[id]);
+  const nodeOutputs = useCanvasStore((s) => s.runNodeOutputs[id]);
+  const style       = CATEGORY_STYLE["docking"];
+
+  const numPred = Math.max(1, Math.min(20, Number(data.params.num_predictions ?? 5)));
+  const handles = Array.from({ length: numPred }, (_, i) => ({
+    id:    `complex_${i + 1}`,
+    label: String(i + 1),
+    top:   `${((i + 0.5) / numPred) * 100}%`,
+  }));
+  const minH = Math.max(130, numPred * 26 + 40);
+
+  return (
+    <div
+      style={{
+        borderColor: style.border,
+        minHeight:   minH,
+        boxShadow: selected
+          ? `0 0 0 2px ${style.border}99, 0 4px 28px ${style.glow}`
+          : `0 4px 20px ${style.glow}`,
+      }}
+      className={`relative bg-surface2 border-2 rounded-xl px-3.5 py-2.5 min-w-[188px]
+        transition-shadow ${runStatus ? STATUS_RING[runStatus] ?? "" : ""}`}
+    >
+      {/* Input handles */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="ligand"
+        style={{ top: "33%", background: style.border }}
+        title="ligand: pdb — wire from ImmuneBuilder, ESMFold, etc."
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="receptor"
+        style={{ top: "67%", background: "#fbbf24" }}
+        title="receptor: pdb — wire from Target Input"
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+
+      {/* Input labels */}
+      <div className="absolute left-4 top-0 bottom-0 flex flex-col justify-around py-3 pointer-events-none pl-1">
+        <span className="text-[9px] font-bold text-orange-300 leading-none">Lig</span>
+        <span className="text-[9px] font-bold text-amber-300 leading-none">Rec</span>
+      </div>
+
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2 pl-5 pr-6">
+        <div className="min-w-0">
+          <div className={`text-[10px] font-semibold uppercase tracking-wider mb-0.5 ${style.label}`}>
+            Docking
+          </div>
+          <div className="text-sm font-bold text-white leading-tight">MEGADOCK</div>
+          <div className="text-[10px] text-slate-500 mt-0.5">{numPred} poses</div>
+        </div>
+        {runStatus && STATUS_DOT[runStatus] && (
+          <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
+        )}
+      </div>
+
+      {/* Rank labels — inside right edge */}
+      <div className="absolute right-5 top-0 bottom-0 pointer-events-none">
+        {handles.map((h) => (
+          <span
+            key={h.id}
+            style={{ top: h.top, transform: "translateY(-50%)" }}
+            className="absolute text-[9px] font-mono text-slate-500 text-right leading-none right-0"
+          >
+            {h.label}
+          </span>
+        ))}
+      </div>
+
+      {/* N ranked output handles */}
+      {handles.map((h) => {
+        const ready = nodeOutputs?.[h.id] != null;
+        return (
+          <Handle
+            key={h.id}
+            type="source"
+            position={Position.Right}
+            id={h.id}
+            style={{ top: h.top, background: ready ? "#34d399" : "#818cf8" }}
+            title={`Pose ${h.label}${ready ? " — ready" : ""}`}
             className="!w-3 !h-3 !border-2 !border-surface"
           />
         );

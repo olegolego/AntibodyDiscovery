@@ -15,7 +15,13 @@ router = APIRouter()
 @router.get("/", response_model=list[Pipeline])
 async def list_pipelines(db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(select(PipelineRow).order_by(PipelineRow.updated_at.desc()))).scalars()
-    return [Pipeline.model_validate_json(r.data) for r in rows]
+    result = []
+    for r in rows:
+        p = Pipeline.model_validate_json(r.data)
+        p.created_at = r.created_at.isoformat()
+        p.updated_at = r.updated_at.isoformat()
+        result.append(p)
+    return result
 
 
 @router.post("/", response_model=Pipeline, status_code=201)

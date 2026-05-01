@@ -13,8 +13,14 @@ class ProteinMPNNAdapter:
         self._cache = MoleculeResultCache(tool_id="proteinmpnn", tool_version=spec.version)
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
+        # Accept "structure" directly or any "structure_N" key from ImmuneBuilder's generic out handle
+        structure = inputs.get("structure") or next(
+            (v for k, v in sorted(inputs.items()) if k.startswith("structure_") and v), None
+        )
+        if not structure:
+            raise ValueError("ProteinMPNN requires a 'structure' (PDB) input")
         cache_inputs = {
-            "structure":      inputs["structure"],
+            "structure":      structure,
             "num_sequences":  inputs.get("num_sequences", 8),
             "sampling_temp":  inputs.get("sampling_temp", 0.1),
         }

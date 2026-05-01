@@ -45,13 +45,13 @@ class ImmuneBuilderAdapter:
         }
         cached = await self._cache.get(cache_inputs)
         if cached is not None:
-            run_ctx.log("Cache hit — returning stored ImmuneBuilder result")
+            await run_ctx.alog("Cache hit — returning stored ImmuneBuilder result")
             return cached
 
         num_models = cache_inputs["num_models"]
         mode = "nanobody" if not light else "antibody"
 
-        run_ctx.log(
+        await run_ctx.alog(
             f"Mode: {mode} | H={len(heavy)} AA"
             f"{', L=' + str(len(light)) + ' AA' if light else ''}"
             f" | {num_models} model(s)"
@@ -66,7 +66,7 @@ class ImmuneBuilderAdapter:
                 if not numbered or numbered[0] is None:
                     raise ValueError("ANARCI could not number the light chain")
             except ValueError as exc:
-                run_ctx.log(
+                await run_ctx.alog(
                     f"WARNING: Light chain not recognised as a valid VL by ANARCI ({exc}). "
                     "Falling back to VH-only (nanobody) mode."
                 )
@@ -85,7 +85,7 @@ class ImmuneBuilderAdapter:
             seqs = {"H": heavy, "L": light}
 
         model_ids = list(range(1, num_models + 1))
-        run_ctx.log(f"Running prediction ({num_models} models)…")
+        await run_ctx.alog(f"Running prediction ({num_models} models)…")
 
         predictor = Builder(model_ids=model_ids)
         try:
@@ -93,7 +93,7 @@ class ImmuneBuilderAdapter:
         except Exception as exc:
             msg = str(exc)
             if "not recognised as an L chain" in msg and mode == "antibody":
-                run_ctx.log("WARNING: L chain rejected — falling back to nanobody mode.")
+                await run_ctx.alog("WARNING: L chain rejected — falling back to nanobody mode.")
                 from ImmuneBuilder import NanoBodyBuilder2  # type: ignore
                 predictor = NanoBodyBuilder2(model_ids=model_ids)
                 seqs = {"H": heavy}
@@ -117,9 +117,9 @@ class ImmuneBuilderAdapter:
                 arr = np.load(error_file)
                 error_estimates = [round(float(v), 4) for v in arr.flatten()]
                 mean_rmsd = round(float(arr.mean()), 4) if arr.size > 0 else 0.0
-                run_ctx.log(f"Error estimates: {len(error_estimates)} residues, mean RMSD {mean_rmsd:.4f} Å")
+                await run_ctx.alog(f"Error estimates: {len(error_estimates)} residues, mean RMSD {mean_rmsd:.4f} Å")
             else:
-                run_ctx.log("WARNING: error_estimates.npy not found")
+                await run_ctx.alog("WARNING: error_estimates.npy not found")
 
             for rank in range(num_models):
                 i = rank + 1  # structure_1 .. structure_4
@@ -134,7 +134,7 @@ class ImmuneBuilderAdapter:
                 )
 
                 if pdb_path is None:
-                    run_ctx.log(f"WARNING: no PDB found for rank {rank}")
+                    await run_ctx.alog(f"WARNING: no PDB found for rank {rank}")
                     outputs[f"structure_{i}"] = None
                     continue
 
@@ -144,15 +144,15 @@ class ImmuneBuilderAdapter:
                     from ImmuneBuilder.refine import refine as ib_refine  # type: ignore
                     if ib_refine(pdb_path, refined_path):
                         pdb_path = refined_path
-                        run_ctx.log(f"Rank {rank} refined ✓")
+                        await run_ctx.alog(f"Rank {rank} refined ✓")
                     else:
-                        run_ctx.log(f"Rank {rank} refinement returned False — using unrefined")
+                        await run_ctx.alog(f"Rank {rank} refinement returned False — using unrefined")
                 except Exception as exc:
-                    run_ctx.log(f"Refinement unavailable for rank {rank} ({type(exc).__name__}) — using unrefined")
+                    await run_ctx.alog(f"Refinement unavailable for rank {rank} ({type(exc).__name__}) — using unrefined")
 
                 with open(pdb_path) as f:
                     outputs[f"structure_{i}"] = f.read()
-                run_ctx.log(f"Model {i} ready")
+                await run_ctx.alog(f"Model {i} ready")
 
         # Pad unused slots
         for i in range(num_models + 1, 5):
@@ -160,7 +160,7 @@ class ImmuneBuilderAdapter:
 
         # Keep error estimates for analysis storage (small: ~250 floats for an antibody)
         outputs["error_estimates"] = error_estimates
-        run_ctx.log(f"Done — {num_models} model(s), mean RMSD {mean_rmsd:.4f} Å")
+        await run_ctx.alog(f"Done — {num_models} model(s), mean RMSD {mean_rmsd:.4f} Å")
 
         await self._cache.put(cache_inputs, outputs, run_id=run_ctx.run_id, node_id=run_ctx.node_id)
         return outputs

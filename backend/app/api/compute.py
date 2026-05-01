@@ -107,7 +107,13 @@ async def compute_execute(ws: WebSocket) -> None:
             await ws.send_json({"type": "done", "result": None, "error": None})
             return
 
-        await _exec_with_stream(code, injected, ws)
+        try:
+            await asyncio.wait_for(_exec_with_stream(code, injected, ws), timeout=30.0)
+        except asyncio.TimeoutError:
+            try:
+                await ws.send_json({"type": "done", "result": None, "error": "Execution timed out (30s limit)"})
+            except Exception:
+                pass
     except WebSocketDisconnect:
         pass
     except Exception as exc:

@@ -1,0 +1,53 @@
+# Protein Design Platform — Docker services for GPU/heavy tools
+#
+# Usage:
+#   docker compose up -d          # start all tool servers
+#   docker compose up esmfold -d  # start only ESMFold
+#   docker compose down           # stop all
+#   docker compose logs -f        # stream logs
+#
+# Ports (match config.env):
+#   ProteinMPNN  → localhost:8003
+#   ESMFold      → localhost:8004
+#
+# For GPU machines add:  deploy: { resources: { reservations: { devices: [{driver: nvidia, count: 1, capabilities: [gpu]}] } } }
+
+services:
+
+  proteinmpnn:
+    build:
+      context: ./tools/proteinmpnn
+      dockerfile: Dockerfile
+    image: pdp-proteinmpnn:latest
+    container_name: pdp-proteinmpnn
+    ports:
+      - "8003:8080"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  esmfold:
+    build:
+      context: ./tools/esmfold
+      dockerfile: Dockerfile
+    image: pdp-esmfold:latest
+    container_name: pdp-esmfold
+    ports:
+      - "8004:8080"
+    restart: unless-stopped
+    # ESMFold weights cache — persisted so rebuilds don't re-download
+    volumes:
+      - esmfold-cache:/root/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 60s
+      timeout: 15s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  esmfold-cache:

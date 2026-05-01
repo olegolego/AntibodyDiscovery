@@ -6,6 +6,7 @@ from app.tools.base import RunContext
 # Maps tool id → adapter class (lazy-imported to avoid loading all deps at startup)
 _ADAPTER_MAP = {
     "sequence_input": ("app.tools.adapters.echo", "EchoAdapter"),
+    "sequence_db":    ("app.tools.adapters.sequence_db", "SequenceDbAdapter"),
     "target_input": ("app.tools.adapters.echo", "EchoAdapter"),
     "echo": ("app.tools.adapters.echo", "EchoAdapter"),
     "immunebuilder": ("app.tools.adapters.immunebuilder", "ImmuneBuilderAdapter"),
@@ -18,6 +19,8 @@ _ADAPTER_MAP = {
     "biophi":            ("app.tools.adapters.biophi",    "BioPhiAdapter"),
     "ablang":            ("app.tools.adapters.ablang",    "AbLangAdapter"),
     "equidock":          ("app.tools.adapters.equidock",  "EquiDockAdapter"),
+    "megadock":          ("app.tools.adapters.megadock",  "MEGADOCKAdapter"),
+    "gromacs_mmpbsa":    ("app.tools.adapters.gromacs",   "GROMACSAdapter"),
     "compute":           ("app.tools.adapters.compute",   "ComputeAdapter"),
     "custom_dnn":        ("app.tools.adapters.toolbox",   "ToolboxAdapter"),
     "diffusion_design":  ("app.tools.adapters.toolbox",   "ToolboxAdapter"),

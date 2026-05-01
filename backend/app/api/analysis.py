@@ -11,7 +11,7 @@ from app.db.session import AsyncSessionLocal
 router = APIRouter()
 
 
-@router.get("/runs/{run_id}/nodes/{node_id}")
+@router.get("/runs/{run_id}/nodes/{node_id}/")
 async def get_node_analysis(run_id: str, node_id: str) -> dict[str, Any]:
     async with AsyncSessionLocal() as db:
         row = (
@@ -38,7 +38,7 @@ async def get_node_analysis(run_id: str, node_id: str) -> dict[str, Any]:
     }
 
 
-@router.get("/runs/{run_id}")
+@router.get("/runs/{run_id}/")
 async def list_run_analyses(run_id: str) -> list[dict[str, Any]]:
     async with AsyncSessionLocal() as db:
         rows = (

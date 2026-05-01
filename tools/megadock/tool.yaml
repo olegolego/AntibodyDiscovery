@@ -1,0 +1,58 @@
+id: megadock
+name: MEGADOCK
+version: "4.1.1"
+category: docking
+description: >
+  Ultra-high-performance rigid-body protein-protein docking using 3D-FFT sampling.
+  Rapidly ranks ~3600 rotational configurations and returns the top-N docked complexes
+  in seconds. Ideal for fast screening before HADDOCK3 refinement. Complement to
+  EquiDock: same inputs, FFT-based scoring rather than neural network. CPU-only on
+  local machines; GPU-accelerated on cloud instances.
+
+inputs:
+  - name: receptor
+    type: pdb
+    required: true
+    default_file: "app/tools/data/targets/spike_rbd.pdb"
+    description: >
+      Receptor protein PDB (stays fixed in the docking reference frame).
+      Typically the antigen/target. Wire from Target Input or AlphaFold.
+
+  - name: ligand
+    type: pdb
+    required: true
+    description: >
+      Ligand protein PDB (the molecule that gets rotated and translated).
+      Typically the antibody. Wire from ImmuneBuilder, ESMFold, or AlphaFold.
+
+  - name: num_predictions
+    type: int
+    required: false
+    default: 5
+    description: "Number of top poses to return (1–20). Each generates a full complex PDB."
+
+  - name: rotational_sampling
+    type: int
+    required: false
+    default: 3600
+    description: >
+      Rotational sampling density: 3600 (15° steps, fast, ~10 s) or
+      54000 (6° steps, accurate, ~90 s). Use 3600 for screening.
+
+outputs:
+  - name: best_complex
+    type: pdb
+    description: "Rank-1 docked complex (transformed ligand + receptor, combined PDB)."
+
+  - name: top_scores
+    type: json
+    description: "Docking scores for the top N predictions: [{rank, score, complex_pdb}]."
+
+  - name: metadata
+    type: json
+    description: "Run parameters: num_predictions, rotational_sampling, timing."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 300

@@ -6,7 +6,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import type { Edge, Node } from "reactflow";
 import { useCanvasStore, type NodeData } from "./store";
 
-const WS_URL = "ws://localhost:8000/ws/compute/execute";
+const WS_URL = `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws/compute/execute`;
 
 type OutputLine =
   | { kind: "stdout"; text: string }

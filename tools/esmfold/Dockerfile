@@ -1,20 +1,23 @@
-# ESMFold requires PyTorch + CUDA. Use the official PyTorch base image.
-# Adjust CUDA version to match your GPU instance (sm_80 = A100, sm_86 = A10G/3090).
-FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+# ESMFold — CPU-only build using HuggingFace transformers (no openfold dep needed).
+# Weights (~2.7 GB) download at first request and are cached in the esmfold-cache volume.
+FROM python:3.10-slim
 
 WORKDIR /app
 
-# fair-esm pulls in ~2 GB of model weights on first run; pre-download in build
-# by setting the cache dir to a layer we can cache in CI.
-ENV TORCH_HOME=/app/.cache/torch
-ENV ESM_DATA=/app/.cache/esm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl && rm -rf /var/lib/apt/lists/*
 
+# CPU-only PyTorch 2.5 (transformers >= 4.36 requires torch >= 2.4)
 RUN pip install --no-cache-dir \
-    "fair-esm[esmfold]" \
+    torch==2.5.0 torchvision==0.20.0 --index-url https://download.pytorch.org/whl/cpu
+
+# transformers includes its own openfold_utils — no separate openfold install needed
+RUN pip install --no-cache-dir \
+    "transformers>=4.36" \
+    "numpy<2.0" \
+    accelerate \
     fastapi \
-    "uvicorn[standard]" \
-    && python -c "import esm; esm.pretrained.esmfold_v1()" \
-    || echo "Pre-download skipped (no GPU at build time)"
+    "uvicorn[standard]"
 
 COPY server.py .
 

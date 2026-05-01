@@ -42,6 +42,9 @@ tools/abmap/pretrained_models/
 tools/equidock/repo/
 tools/rfdiffusion/RFdiffusion/
 tools/rfdiffusion/models/
+tools/rfdiffusion/outputs/
+tools/megadock/repo/
+tools/megadock/bin/
 tools/*/cache.db
 
 # Run logs

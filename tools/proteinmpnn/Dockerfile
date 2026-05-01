@@ -1,20 +1,27 @@
-# ProteinMPNN works with PyTorch; no exotic CUDA ops, runs on most GPU images.
-FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+# ProteinMPNN — CPU-only (fast enough, ~3s per design on CPU).
+# Works on Apple Silicon via Docker Desktop or natively on amd64.
+FROM python:3.10-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl && rm -rf /var/lib/apt/lists/*
 
-RUN git clone https://github.com/dauparas/ProteinMPNN.git /proteinmpnn
+# CPU-only PyTorch
+RUN pip install --no-cache-dir \
+    torch==2.2.0 --index-url https://download.pytorch.org/whl/cpu
 
 RUN pip install --no-cache-dir \
+    "numpy<2.0" \
     fastapi \
     "uvicorn[standard]" \
     biopython
 
-ENV PYTHONPATH="/proteinmpnn:$PYTHONPATH"
+# ProteinMPNN repo — weights (~130 MB) are checked in
+RUN git clone --depth 1 https://github.com/dauparas/ProteinMPNN.git /proteinmpnn
 
-# Model weights are checked into the repo (~130 MB); they come with the clone.
+ENV PROTEINMPNN_REPO=/proteinmpnn
+ENV PROTEINMPNN_PYTHON=python
 
 COPY server.py .
 

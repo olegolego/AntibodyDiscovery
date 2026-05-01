@@ -20,11 +20,17 @@ async def submit_run(pipeline: Pipeline, background_tasks: BackgroundTasks):
 
 @router.get("/", response_model=list[Run])
 async def list_runs(db: AsyncSession = Depends(get_db)):
-    rows = (await db.execute(select(RunRow).order_by(RunRow.created_at.desc()))).scalars()
-    return [Run.model_validate_json(r.data) for r in rows]
+    rows = (await db.execute(select(RunRow).order_by(RunRow.created_at.desc()))).scalars().all()
+    result = []
+    for r in rows:
+        run = Run.model_validate_json(r.data)
+        if not run.created_at:
+            run.created_at = r.created_at.isoformat()
+        result.append(run)
+    return result
 
 
-@router.get("/{run_id}", response_model=Run)
+@router.get("/{run_id}/", response_model=Run)
 async def get_run_status(run_id: str):
     run = await get_run(run_id)
     if run is None:
@@ -32,7 +38,7 @@ async def get_run_status(run_id: str):
     return run
 
 
-@router.post("/{run_id}/cancel")
+@router.post("/{run_id}/cancel/")
 async def cancel_run(run_id: str):
     run = await get_run(run_id)
     if run is None:

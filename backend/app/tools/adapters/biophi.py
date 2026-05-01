@@ -1,10 +1,16 @@
 """BioPhi adapter — calls tools/biophi/run.py in the 'biophi' conda env."""
+import os
+from pathlib import Path
 from typing import Any
 
 from app.models.tool_spec import ToolSpec
 from app.tools.base import RunContext
 from app.tools.molecule_cache import MoleculeResultCache
 from app.tools.subprocess_runner import run_tool_subprocess
+
+_BIOPHI_PYTHON = Path(
+    os.getenv("BIOPHI_CONDA_ENV", "/Users/oswaldkid/miniforge3/envs/biophi")
+) / "bin" / "python"
 
 
 class BioPhiAdapter:
@@ -34,6 +40,7 @@ class BioPhiAdapter:
             timeout=self.spec.runtime.timeout_seconds,
             on_log=run_ctx.alog,
             run_id=run_ctx.run_id,
+            python_path=str(_BIOPHI_PYTHON),
         )
 
         vh_mut = outputs.get("heavy_mutations", 0)

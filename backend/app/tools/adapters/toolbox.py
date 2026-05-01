@@ -26,5 +26,5 @@ class ToolboxAdapter:
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
         msg = _ROADMAP.get(self.spec.id, f"'{self.spec.name}' is not yet implemented.")
-        run_ctx.log(f"[WIP] {msg}")
+        await run_ctx.alog(f"[WIP] {msg}")
         raise NotImplementedError(msg)

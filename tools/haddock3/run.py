@@ -71,6 +71,49 @@ def _write_act_pass(path: str, active: str, passive: str = "") -> None:
         f.write(passive.strip() + "\n")
 
 
+def _extract_vh_sequence(pdb_path: str) -> str:
+    """Extract amino acid sequence from a single-chain PDB using pdb_tofasta."""
+    r = subprocess.run(
+        f"pdb_tofasta {os.path.basename(pdb_path)}",
+        shell=True, capture_output=True, text=True, env=_ENV,
+        cwd=os.path.dirname(pdb_path),
+    )
+    seq = ""
+    for line in r.stdout.splitlines():
+        if not line.startswith(">"):
+            seq += line.strip()
+    return seq
+
+
+def _detect_cdrs_chothia(pdb_path: str) -> tuple[list[int], list[int], list[int]] | None:
+    """
+    Use abnumber/ANARCI to detect CDR-H1/2/3 as 1-based sequential residue numbers
+    matching the sequential numbering produced by pdb_reres -1 on the same PDB.
+    Returns (cdr1, cdr2, cdr3) lists or None on failure.
+    """
+    try:
+        from abnumber import Chain  # requires anarci in the same venv
+        seq = _extract_vh_sequence(pdb_path)
+        if len(seq) < 50:
+            return None
+        chain = Chain(seq, scheme="chothia")
+        all_pos = list(chain.positions.keys())
+        pos_to_seq = {p: i + 1 for i, p in enumerate(all_pos)}
+        cdr1 = sorted(pos_to_seq[p] for p in chain.cdr1_dict if p in pos_to_seq)
+        cdr2 = sorted(pos_to_seq[p] for p in chain.cdr2_dict if p in pos_to_seq)
+        cdr3 = sorted(pos_to_seq[p] for p in chain.cdr3_dict if p in pos_to_seq)
+        if not (cdr1 and cdr2 and cdr3):
+            return None
+        _progress(
+            f"ANARCI CDR detection (Chothia): "
+            f"H1={cdr1[0]}-{cdr1[-1]}, H2={cdr2[0]}-{cdr2[-1]}, H3={cdr3[0]}-{cdr3[-1]}"
+        )
+        return cdr1, cdr2, cdr3
+    except Exception as exc:
+        _progress(f"WARN: CDR auto-detection failed ({exc}); falling back to provided positions")
+        return None
+
+
 def _write_config(path: str, run_dir: str, sampling: int, select_top: int) -> None:
     with open(path, "w") as f:
         f.write(f"""
@@ -172,14 +215,19 @@ def _best_complex(tsv_path: str) -> str | None:
     if best_path and os.path.exists(best_path):
         print(f"Best complex: {best_path} (rank {best_rank})", file=sys.stderr, flush=True)
         return open(best_path).read()
-    if best_path:
-        print(f"WARNING: best complex path not found: {best_path}", file=sys.stderr, flush=True)
-        # Try finding any PDB in the same caprieval dir as fallback
-        caprieval_dir = os.path.dirname(tsv_path)
-        pdbs = sorted(glob.glob(os.path.join(caprieval_dir, "*.pdb")))
+    # Path from TSV not found — search run directory broadly for any docked PDB
+    run_dir = os.path.dirname(os.path.dirname(tsv_path))
+    for pattern in [
+        os.path.join(run_dir, "*_seletopclusts", "cluster_1_model_1.pdb"),
+        os.path.join(run_dir, "*_seletopclusts", "*.pdb"),
+        os.path.join(run_dir, "*_rigidbody", "rigidbody_1.pdb"),
+        os.path.join(run_dir, "**", "*.pdb"),
+    ]:
+        pdbs = sorted(glob.glob(pattern, recursive=True))
         if pdbs:
-            print(f"Fallback: using {os.path.basename(pdbs[0])}", file=sys.stderr, flush=True)
+            print(f"Fallback best complex: {pdbs[0]}", file=sys.stderr, flush=True)
             return open(pdbs[0]).read()
+    print("WARNING: no docked PDB found anywhere in run dir", file=sys.stderr, flush=True)
     return None
 
 
@@ -187,11 +235,20 @@ def _progress(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+def _first_protein_chain(pdb_text: str) -> str:
+    """Return the first chain ID that has ATOM records (protein/nucleic)."""
+    for line in pdb_text.splitlines():
+        if line.startswith("ATOM"):
+            return line[21]
+    return "A"
+
+
 def main() -> None:
     inputs = json.load(sys.stdin)
 
     antibody_pdb       = str(inputs["antibody"])
     antigen_pdb        = str(inputs["antigen"])
+    antigen_chains     = str(inputs.get("antigen_chains", "")).strip().upper()
     antigen_active     = str(inputs.get("antigen_active_residues", "")).strip()
     antigen_passive    = str(inputs.get("antigen_passive_residues", "")).strip()
     cdr1 = (int(inputs.get("cdr1_start", 26)), int(inputs.get("cdr1_end", 35)))
@@ -203,30 +260,40 @@ def main() -> None:
     select_top = max(1, int(inputs.get("select_top", 50)))
     nanobody   = not bool(vl)
 
-    with tempfile.TemporaryDirectory() as d:
+    _debug_dir = os.getenv("HADDOCK3_KEEP_WORKDIR")
+    _tmpobj = None if _debug_dir else tempfile.TemporaryDirectory()
+    d = _debug_dir if _debug_dir else _tmpobj.name
+    _failed = False
+    try:
         _progress("Writing input PDBs…")
         open(os.path.join(d, "antibody_raw.pdb"), "w").write(antibody_pdb)
         open(os.path.join(d, "antigen_raw.pdb"),  "w").write(antigen_pdb)
 
         _progress(f"Cleaning antibody ({'nanobody' if nanobody else 'VH+VL'})…")
         if nanobody:
+            # For nanobody: extract VH-only, keep intermediate before renumbering for CDR detection
             _run(
                 f"pdb_tidy -strict antibody_raw.pdb | pdb_selchain -{vh} "
-                "| pdb_delhetatm | pdb_fixinsert | pdb_selaltloc | pdb_keepcoord "
-                "| pdb_reres -1 | pdb_chain -A | pdb_chainxseg | pdb_tidy -strict "
+                "| pdb_delhetatm | pdb_delelem -H | pdb_fixinsert | pdb_selaltloc | pdb_keepcoord"
+                "| pdb_tidy -strict > antibody_vh_raw.pdb",
+                cwd=d, label="extract_nb"
+            )
+            _run(
+                "pdb_reres -1 antibody_vh_raw.pdb | pdb_chain -A | pdb_chainxseg | pdb_tidy -strict "
                 "> antibody_clean.pdb",
                 cwd=d, label="clean_antibody"
             )
+            _vh_for_cdr = os.path.join(d, "antibody_vh_raw.pdb")
         else:
             _run(
                 f"pdb_tidy -strict antibody_raw.pdb | pdb_selchain -{vh} "
-                "| pdb_delhetatm | pdb_fixinsert | pdb_selaltloc | pdb_keepcoord "
+                "| pdb_delhetatm | pdb_delelem -H | pdb_fixinsert | pdb_selaltloc | pdb_keepcoord"
                 "| pdb_tidy -strict > antibody_H.pdb",
                 cwd=d, label="extract VH"
             )
             _run(
                 f"pdb_tidy -strict antibody_raw.pdb | pdb_selchain -{vl} "
-                "| pdb_delhetatm | pdb_fixinsert | pdb_selaltloc | pdb_keepcoord "
+                "| pdb_delhetatm | pdb_delelem -H | pdb_fixinsert | pdb_selaltloc | pdb_keepcoord"
                 "| pdb_tidy -strict > antibody_L.pdb",
                 cwd=d, label="extract VL"
             )
@@ -236,22 +303,52 @@ def main() -> None:
                 "> antibody_clean.pdb",
                 cwd=d, label="merge antibody"
             )
+            # CDR detection on VH before merging; positions stay valid because VH is always first
+            _vh_for_cdr = os.path.join(d, "antibody_H.pdb")
 
         _progress("Cleaning antigen (preserving original residue numbers)…")
-        _run(
-            "pdb_tidy -strict antigen_raw.pdb | pdb_delhetatm | pdb_fixinsert "
-            "| pdb_selaltloc | pdb_keepcoord "
-            "| pdb_chain -B | pdb_chainxseg | pdb_tidy -strict "
-            "> antigen_clean.pdb",
-            cwd=d, label="clean_antigen"
-        )
+        # Parse comma-separated chain list; auto-detect first protein chain if not set
+        _raw_chains = [c.strip() for c in antigen_chains.split(",") if c.strip()]
+        if not _raw_chains:
+            _raw_chains = [_first_protein_chain(antigen_pdb)]
+        _sel = ",".join(_raw_chains)
+        _antigen_segid = _raw_chains[0]  # segid used in restraints (epitope must be on first chain)
+        _progress(f"Antigen: chains={_sel!r}, restraint segid={_antigen_segid!r} "
+                  f"(set antigen_chains param to override, e.g. 'A' or 'A,C')")
+        if len(_raw_chains) == 1:
+            # Single chain: rename to B (HADDOCK3 two-body convention)
+            _run(
+                f"pdb_tidy -strict antigen_raw.pdb | pdb_selchain -{_sel} "
+                "| pdb_delhetatm | pdb_delelem -H | pdb_fixinsert "
+                "| pdb_selaltloc | pdb_keepcoord "
+                "| pdb_chain -B | pdb_chainxseg | pdb_tidy -strict "
+                "> antigen_clean.pdb",
+                cwd=d, label="clean_antigen"
+            )
+            _antigen_segid = "B"
+        else:
+            # Multi-chain: keep original chain IDs, propagate as segIDs
+            _run(
+                f"pdb_tidy -strict antigen_raw.pdb | pdb_selchain -{_sel} "
+                "| pdb_delhetatm | pdb_delelem -H | pdb_fixinsert "
+                "| pdb_selaltloc | pdb_keepcoord "
+                "| pdb_chainxseg | pdb_tidy -strict "
+                "> antigen_clean.pdb",
+                cwd=d, label="clean_antigen"
+            )
 
-        _progress("Writing act-pass restraint files…")
-        active_cdr = (
-            list(range(cdr1[0], cdr1[1] + 1))
-            + list(range(cdr2[0], cdr2[1] + 1))
-            + list(range(cdr3[0], cdr3[1] + 1))
-        )
+        _progress("Detecting CDR residues via ANARCI (Chothia scheme)…")
+        _detected = _detect_cdrs_chothia(_vh_for_cdr)
+        if _detected:
+            active_cdr = _detected[0] + _detected[1] + _detected[2]
+        else:
+            # Fall back to user-provided / default positions
+            active_cdr = (
+                list(range(cdr1[0], cdr1[1] + 1))
+                + list(range(cdr2[0], cdr2[1] + 1))
+                + list(range(cdr3[0], cdr3[1] + 1))
+            )
+            _progress(f"Using fallback CDR positions: H1={cdr1}, H2={cdr2}, H3={cdr3}")
         _write_act_pass(os.path.join(d, "antibody-cdr.act-pass"),
                         " ".join(map(str, active_cdr)))
         _write_act_pass(os.path.join(d, "antigen-rbm.act-pass"), antigen_active, antigen_passive)
@@ -260,7 +357,7 @@ def main() -> None:
         _run(
             "haddock3-restraints active_passive_to_ambig "
             "antibody-cdr.act-pass antigen-rbm.act-pass "
-            "--segid-one A --segid-two B > ambig-restraints.tbl",
+            f"--segid-one A --segid-two {_antigen_segid} > ambig-restraints.tbl",
             cwd=d, label="ambig_restraints"
         )
         _run("haddock3-restraints validate_tbl ambig-restraints.tbl --silent",
@@ -294,6 +391,21 @@ def main() -> None:
         scores = _parse_capri(capri_tsv)
         best_complex = _best_complex(capri_tsv)
         artifact_dir = _save_artifacts(os.path.join(d, "run"), best_complex, scores)
+
+    except Exception:
+        _failed = True
+        raise
+    finally:
+        if _tmpobj is not None:
+            if _failed:
+                # Keep work dir for debugging; copy it out before TemporaryDirectory cleanup
+                debug_dest = _ARTIFACT_DIR / f"haddock3_failed_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}"
+                try:
+                    shutil.copytree(_tmpobj.name, str(debug_dest))
+                    _progress(f"Work dir preserved at {debug_dest} for debugging")
+                except Exception:
+                    pass
+            _tmpobj.cleanup()
 
     json.dump({"best_complex": best_complex, "scores": scores, "artifact_dir": artifact_dir}, sys.stdout)
 

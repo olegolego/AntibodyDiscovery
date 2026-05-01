@@ -30,6 +30,6 @@ export interface NodeAnalysis {
 }
 
 export async function fetchNodeAnalysis(runId: string, nodeId: string): Promise<NodeAnalysis> {
-  const res = await axios.get<NodeAnalysis>(`/api/analysis/runs/${runId}/nodes/${nodeId}`);
+  const res = await axios.get<NodeAnalysis>(`/api/analysis/runs/${runId}/nodes/${nodeId}/`);
   return res.data;
 }

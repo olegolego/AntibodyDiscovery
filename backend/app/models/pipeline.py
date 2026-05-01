@@ -26,3 +26,5 @@ class Pipeline(BaseModel):
     schema_version: str = "1"
     nodes: list[PipelineNode] = []
     edges: list[PipelineEdge] = []
+    created_at: str | None = None
+    updated_at: str | None = None

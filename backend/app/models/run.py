@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -36,3 +37,4 @@ class Run(BaseModel):
     pipeline_snapshot: dict
     status: RunStatus = RunStatus.QUEUED
     nodes: dict[str, NodeRun] = {}
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

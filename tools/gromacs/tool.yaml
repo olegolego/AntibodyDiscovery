@@ -1,0 +1,117 @@
+id: gromacs_mmpbsa
+name: GROMACS MD + MM/GBSA
+version: "2024.1"
+category: molecular_dynamics
+description: >
+  Full MD simulation pipeline: topology → solvation → energy minimization →
+  NVT/NPT equilibration → production MD → MM/GBSA binding free energy.
+  Takes an antibody-antigen complex PDB and returns ΔG_bind (kcal/mol) with
+  energy decomposition (vdW, electrostatics, solvation). Wire from HADDOCK3
+  or EquiDock. Requires gmx, gmx_MMPBSA, and cpptraj on PATH (conda mmpbsa env).
+  CPU-only. Typical runtime: 2–12 h depending on production_ns.
+
+inputs:
+  - name: complex_pdb
+    type: pdb
+    required: true
+    default_file: app/tools/data/targets/spike_rbd.pdb
+    description: >
+      Antibody-antigen complex PDB. Wire from HADDOCK3 best_complex or EquiDock
+      best_complex. Chains must match receptor_chains and ligand_chains below.
+
+  - name: receptor_chains
+    type: str
+    required: false
+    default: "H,L"
+    description: >
+      Comma-separated chain IDs for the receptor (antibody).
+      Example: "H,L" for VH+VL, "A" for a nanobody or single-chain receptor.
+
+  - name: ligand_chains
+    type: str
+    required: false
+    default: "B"
+    description: >
+      Comma-separated chain IDs for the ligand (antigen / target).
+      Example: "B" for a single-chain antigen, "C,D" for multi-chain.
+
+  - name: forcefield
+    type: str
+    required: false
+    default: amber99sb-ildn
+    description: "GROMACS force field (amber99sb-ildn recommended for proteins)."
+
+  - name: water_model
+    type: str
+    required: false
+    default: tip3p
+    description: "Water model for solvation (tip3p, spc, or spce)."
+
+  - name: temperature_k
+    type: float
+    required: false
+    default: 300.0
+    description: "Simulation temperature in Kelvin."
+
+  - name: ion_concentration
+    type: float
+    required: false
+    default: 0.15
+    description: "Ionic strength in mol/L (NaCl). Typical physiological: 0.15."
+
+  - name: production_ns
+    type: float
+    required: false
+    default: 10.0
+    description: >
+      Production MD length in nanoseconds. 10 ns is suitable for initial
+      screening; 50–100 ns for publication-quality results.
+
+  - name: discard_ns
+    type: float
+    required: false
+    default: 1.0
+    description: >
+      Nanoseconds to discard from the start of production before MM/GBSA
+      analysis (equilibration artefacts). Must be < production_ns.
+
+  - name: igb
+    type: int
+    required: false
+    default: 5
+    description: >
+      GB model for MM/GBSA (igb=5 = OBC2, recommended for proteins).
+      Valid values: 1, 2, 5, 7, 8.
+
+  - name: mmpbsa_interval
+    type: int
+    required: false
+    default: 5
+    description: >
+      Analyze every Nth frame in the trajectory for MM/GBSA. Higher = faster
+      but noisier. 1 = every frame, 5 = every 5th frame (default).
+
+outputs:
+  - name: delta_g_bind
+    type: float
+    description: >
+      MM/GBSA binding free energy ΔG_bind in kcal/mol. More negative = stronger
+      binding. Best used for ranking, not absolute Kd prediction.
+
+  - name: energy_decomposition
+    type: json
+    description: >
+      Per-component energy breakdown: VDWAALS, EEL (electrostatics),
+      EGB (polar solvation), ESURF (non-polar solvation), DELTA G gas,
+      DELTA G solv, DELTA TOTAL.
+
+  - name: md_convergence
+    type: json
+    description: >
+      MD quality metrics: average temperature, pressure, potential energy,
+      and frame statistics. Use to assess whether the simulation converged.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 86400

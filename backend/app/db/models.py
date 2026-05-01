@@ -189,3 +189,26 @@ class AbMAPEmbeddingRow(Base):
         Index("ix_abmap_molecule_key", "molecule_key"),
         Index("ix_abmap_molecule_params", "molecule_key", "chain_type", "task", "embedding_type", "num_mutations"),
     )
+
+
+class SequenceCollectionRow(Base):
+    __tablename__ = "sequence_collections"
+
+    id:          Mapped[str]      = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name:        Mapped[str]      = mapped_column(String(255), nullable=False)
+    description: Mapped[str|None] = mapped_column(Text, nullable=True)
+    created_at:  Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at:  Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class SequenceEntryRow(Base):
+    __tablename__ = "sequence_entries"
+
+    id:                 Mapped[str]      = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    collection_id:      Mapped[str]      = mapped_column(String(36), nullable=False, index=True)
+    name:               Mapped[str|None] = mapped_column(String(255), nullable=True)
+    heavy_chain:        Mapped[str]      = mapped_column(Text, nullable=False)
+    light_chain:        Mapped[str|None] = mapped_column(Text, nullable=True)
+    source_molecule_id: Mapped[str|None] = mapped_column(String(36), nullable=True)
+    notes:              Mapped[str|None] = mapped_column(Text, nullable=True)
+    created_at:         Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

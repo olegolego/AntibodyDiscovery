@@ -29,5 +29,9 @@ class Settings(BaseSettings):
     esmfold_url: str = "http://localhost:8004"
     abmap_url: str = "http://localhost:8005"
 
+    # Comma-separated list of allowed CORS origins.
+    # start.sh sets this dynamically to include the LAN IP.
+    cors_allowed_origins: str = "http://localhost:5173,http://localhost:3000"
+
 
 settings = Settings()

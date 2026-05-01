@@ -14,13 +14,33 @@ class HADDOCK3Adapter:
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
         inputs = dict(inputs)
+
+        # Alias common upstream key names
         if not inputs.get("antigen") and inputs.get("target"):
             inputs["antigen"] = inputs.pop("target")
 
+        # ImmuneBuilder outputs structure_1..4; ESMFold/AlphaFold output 'structure'
+        # Assign to antibody if not already set
+        _STRUCT_KEYS = ("structure_1", "structure_2", "structure_3", "structure_4", "structure")
         if not inputs.get("antibody"):
-            raise ValueError("antibody PDB is required")
+            for k in _STRUCT_KEYS:
+                v = inputs.get(k)
+                if isinstance(v, str) and "ATOM" in v:
+                    inputs["antibody"] = v
+                    break
+
+        # A second structure-like value (e.g. AlphaFold target) can serve as antigen
         if not inputs.get("antigen"):
-            raise ValueError("antigen PDB is required")
+            for k in _STRUCT_KEYS:
+                v = inputs.get(k)
+                if isinstance(v, str) and "ATOM" in v and v != inputs.get("antibody"):
+                    inputs["antigen"] = v
+                    break
+
+        if not inputs.get("antibody"):
+            raise ValueError("antibody PDB is required (wire from ImmuneBuilder, ESMFold, etc.)")
+        if not inputs.get("antigen"):
+            raise ValueError("antigen PDB is required (wire from Target Input or AlphaFold)")
         if not str(inputs.get("antigen_active_residues", "")).strip():
             raise ValueError("antigen_active_residues is required (space-separated epitope residue numbers)")
 

@@ -98,55 +98,90 @@ interface LogLine {
 function TerminalLog({ run }: { run: Run }) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Show only the active node's logs. Fall back to the last node that has logs.
   const runningEntry = Object.entries(run.nodes).find(([, nr]) => nr.status === "running");
-  const activeEntry = runningEntry ?? [...Object.entries(run.nodes)]
-    .reverse()
-    .find(([, nr]) => nr.logs.length > 0 || nr.error);
-
-  const [activeId, activeNode] = activeEntry ?? [null, null];
+  const [runningId, runningNode] = runningEntry ?? [null, null];
   const isRunning = !!runningEntry;
 
-  const lines: LogLine[] = activeNode
+  // Last node that has finished with logs/error — used as context when running node is silent
+  const lastFinishedEntry = [...Object.entries(run.nodes)]
+    .reverse()
+    .find(([id, nr]) => id !== runningId && (nr.logs.length > 0 || nr.error));
+  const [lastId, lastNode] = lastFinishedEntry ?? [null, null];
+
+  // Running node lines (may be empty at startup)
+  const runningLines: LogLine[] = runningNode
     ? [
-        ...activeNode.logs.map((text) => ({ nodeId: activeId!, text, kind: "log" as const })),
-        ...(activeNode.error ? [{ nodeId: activeId!, text: activeNode.error, kind: "error" as const }] : []),
+        ...runningNode.logs.map((text) => ({ nodeId: runningId!, text, kind: "log" as const })),
+        ...(runningNode.error ? [{ nodeId: runningId!, text: runningNode.error, kind: "error" as const }] : []),
       ]
+    : [];
+
+  // When the running node hasn't logged anything yet, show last finished node's output as context
+  const showContext = isRunning && runningLines.length === 0 && !!lastNode;
+
+  const displayLines: LogLine[] = showContext
+    ? [
+        ...lastNode!.logs.map((text) => ({ nodeId: lastId!, text, kind: "log" as const })),
+        ...(lastNode!.error ? [{ nodeId: lastId!, text: lastNode!.error, kind: "error" as const }] : []),
+      ]
+    : runningLines.length > 0
+    ? runningLines
+    : !isRunning
+    ? (lastNode
+        ? [
+            ...lastNode.logs.map((text) => ({ nodeId: lastId!, text, kind: "log" as const })),
+            ...(lastNode.error ? [{ nodeId: lastId!, text: lastNode.error, kind: "error" as const }] : []),
+          ]
+        : [])
     : [];
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [lines.length]);
+  }, [displayLines.length]);
+
+  const titleId = showContext ? lastId : (runningId ?? lastId);
 
   return (
     <div className="shrink-0 border-t border-white/10 bg-[#0d0d0d] rounded-b-xl overflow-hidden">
       {/* Terminal title bar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5 bg-[#111]">
         <span className="text-[10px] text-slate-500 font-mono select-none">
-          {activeId ?? "pipeline log"}
+          {titleId ?? "pipeline log"}
+          {showContext && (
+            <span className="text-slate-700 ml-1">(context)</span>
+          )}
         </span>
-        {isRunning && (
-          <span className="text-[9px] text-sky-500 animate-pulse font-mono">● running</span>
-        )}
+        <div className="flex items-center gap-2">
+          {isRunning && runningId && (
+            <span className="text-[9px] text-sky-400 font-mono">
+              {runningId} <span className="animate-pulse">●</span>
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Log body */}
       <div className="h-44 overflow-y-auto px-3 py-2 space-y-0.5 font-mono text-xs">
-        {lines.length === 0 && !isRunning && (
+        {displayLines.length === 0 && !isRunning && (
           <span className="text-slate-700">no output yet</span>
         )}
-        {lines.length === 0 && isRunning && (
-          <span className="text-slate-600 animate-pulse">waiting for output…</span>
+        {displayLines.length === 0 && isRunning && !showContext && (
+          <span className="text-slate-600 animate-pulse">starting {runningId}…</span>
         )}
-        {lines.map((line, i) => (
-          <div key={i} className="leading-5">
+        {displayLines.map((line, i) => (
+          <div key={i} className={`leading-5 ${showContext ? "opacity-40" : ""}`}>
             <span className={line.kind === "error" ? "text-red-400" : "text-emerald-300"}>
               {line.text}
             </span>
           </div>
         ))}
-        {isRunning && (
+        {isRunning && runningLines.length > 0 && (
           <div className="text-slate-500 animate-pulse leading-5">▊</div>
+        )}
+        {showContext && (
+          <div className="mt-1 text-[10px] text-sky-600 animate-pulse">
+            ↑ last output · waiting for {runningId}…
+          </div>
         )}
         <div ref={bottomRef} />
       </div>
@@ -162,12 +197,35 @@ interface RunPanelProps {
   onOpenAnalysis: (runId: string, nodeId: string) => void;
 }
 
+function useElapsed(createdAt: string | undefined, active: boolean): string {
+  const [elapsed, setElapsed] = useState("");
+  useEffect(() => {
+    if (!active || !createdAt) { setElapsed(""); return; }
+    function tick() {
+      const secs = Math.floor((Date.now() - new Date(createdAt!).getTime()) / 1000);
+      if (secs < 60) setElapsed(`${secs}s`);
+      else setElapsed(`${Math.floor(secs / 60)}m ${secs % 60}s`);
+    }
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [createdAt, active]);
+  return elapsed;
+}
+
 export function RunPanel({ runId, onClose, onOpenAnalysis }: RunPanelProps) {
   const [run, setRun] = useState<Run | null>(null);
   const setRunNodeStatuses = useCanvasStore((s) => s.setRunNodeStatuses);
   const setRunNodeOutputs = useCanvasStore((s) => s.setRunNodeOutputs);
 
-  useRunWebSocket(runId, (updated) => {
+  useEffect(() => {
+    fetch(`/api/runs/${runId}/`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data) applyRun(data); })
+      .catch(() => {});
+  }, [runId]);
+
+  function applyRun(updated: Run) {
     setRun(updated);
     const statuses = Object.fromEntries(
       Object.entries(updated.nodes).map(([id, nr]) => [id, nr.status])
@@ -179,7 +237,11 @@ export function RunPanel({ runId, onClose, onOpenAnalysis }: RunPanelProps) {
         .map(([id, nr]) => [id, nr.outputs])
     );
     setRunNodeOutputs(outputs);
-  });
+  }
+
+  useRunWebSocket(runId, applyRun);
+
+  const elapsed = useElapsed(run?.created_at, run?.status === "running" || run?.status === "queued");
 
   function handleClose() {
     onClose();
@@ -187,7 +249,7 @@ export function RunPanel({ runId, onClose, onOpenAnalysis }: RunPanelProps) {
 
   async function handleStop() {
     if (!runId) return;
-    await fetch(`/api/runs/${runId}/cancel`, { method: "POST" });
+    await fetch(`/api/runs/${runId}/cancel/`, { method: "POST" });
   }
 
   return (
@@ -226,9 +288,14 @@ export function RunPanel({ runId, onClose, onOpenAnalysis }: RunPanelProps) {
               <span className="text-[11px] font-mono text-slate-600 truncate mr-3">
                 {run.id.slice(0, 12)}…
               </span>
-              <span className={`text-sm font-bold shrink-0 ${STATUS_COLOR[run.status]}`}>
-                {run.status.toUpperCase()}
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                {elapsed && (
+                  <span className="text-[11px] font-mono text-slate-500">{elapsed}</span>
+                )}
+                <span className={`text-sm font-bold ${STATUS_COLOR[run.status]}`}>
+                  {run.status.toUpperCase()}
+                </span>
+              </div>
             </div>
 
             <div className="space-y-2">

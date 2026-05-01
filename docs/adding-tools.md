@@ -504,7 +504,118 @@ curl http://localhost:8000/api/tools | python3 -m json.tool | grep '"id"'
 
 ---
 
-## 12. Shipping checklist
+## 12. Lessons learned (hard-won bugs & pitfalls)
+
+These are real bugs we hit building the initial tool set. Read before writing code.
+
+### Frontend / React
+
+**`useRef(randomUUID())` is an anti-pattern for persistent IDs**
+
+`useRef(randomUUID()).current` generates a new UUID on every component *mount*, not just once. On the Mac, hot-reloading and page refreshes mount fresh components — so every refresh silently creates a brand-new pipeline ID, and every Save creates a duplicate row in the DB.
+
+Fix: store stable IDs in `useState` + `localStorage`:
+```typescript
+const [pipelineId, setPipelineId] = useState(() => {
+  const stored = localStorage.getItem("pdp_pipeline_id");
+  if (stored) return stored;
+  const fresh = randomUUID();
+  localStorage.setItem("pdp_pipeline_id", fresh);
+  return fresh;
+});
+```
+Also call `setPipelineId(pipeline.id)` when loading a saved pipeline, so subsequent Saves target the correct row.
+
+---
+
+**Vite HMR gets stuck if you add an import before the file exists**
+
+If you add `import { Foo } from "./foo/Foo"` to a file and *then* create `foo/Foo.tsx`, Vite's HMR enters a broken state and serves stale bundles. The terminal shows no errors; the browser silently uses old code.
+
+Fix order: **create the file first**, then add the import. If you already hit this state, kill the dev server (`lsof -ti tcp:5173 | xargs kill`) and restart it fresh.
+
+---
+
+**`savePipeline` fallback must only trigger on 404, not all errors**
+
+The original catch-all pattern tried a POST after *any* PUT failure — masking real errors (permission denied, malformed JSON, etc.) with an unhelpful duplicate create.
+
+```typescript
+// WRONG — catches all errors
+try { await api.put(...); } catch { await api.post(...); }
+
+// RIGHT — only fall back on 404
+try { await api.put(...); }
+catch (err) {
+  if ((err as { response?: { status?: number } })?.response?.status !== 404) throw err;
+  await api.post(...);
+}
+```
+
+---
+
+### Backend / Python
+
+**HTTP 400 from a tool server kills the entire pipeline**
+
+`post_with_retry` retries on connection errors and 5xx responses, but treats 4xx as fatal (they mean "your request is malformed"). If an optional/enrichment tool like AbMAP rejects a sequence with `400 Region seems invalid`, the `RuntimeError` it raises propagates up and cancels the run.
+
+Fix: wrap optional tools in `try/except RuntimeError` in the adapter and return a graceful empty result:
+```python
+try:
+    data = await post_with_retry(settings.abmap_url, "/embed", payload, ...)
+except RuntimeError as exc:
+    await run_ctx.alog(f"⚠ AbMAP skipped: {exc}")
+    return {"embedding": [], "metadata": {"error": str(exc), "skipped": True}}
+```
+Apply this pattern to any tool whose output is not required by downstream nodes.
+
+---
+
+**Subprocess adapters must use asyncio — `subprocess.Popen` blocks the event loop**
+
+`subprocess.Popen` with `for line in proc.stdout:` is a *blocking* loop that freezes the FastAPI event loop for the entire duration of the tool run (minutes). All other WebSocket updates and API requests stall.
+
+Always use `asyncio.create_subprocess_exec` or the `run_tool_subprocess` helper instead:
+```python
+# WRONG
+proc = subprocess.Popen(cmd, ...)
+for line in proc.stdout:          # ← blocks the event loop
+    await run_ctx.alog(line)
+
+# RIGHT — use run_tool_subprocess (handles async + streaming + cancellation)
+outputs = await run_tool_subprocess(
+    tool_id="my_tool", inputs=inputs, timeout=..., on_log=run_ctx.alog, run_id=run_ctx.run_id
+)
+```
+
+---
+
+### Frontend UX — live terminal
+
+**"Waiting for output" shows the wrong node during transitions**
+
+When one node finishes and the next starts, the running node typically has no logs for 10–30 seconds (model loading, environment init). If the terminal switches immediately to the running node, it shows blank — users think the tool crashed.
+
+Fix in `TerminalLog`:
+1. Track the currently-running node and the last *finished* node
+2. When the running node has no logs yet, display the last finished node's output at reduced opacity with a "↑ last output · waiting for {running node}…" footer
+3. Switch to the running node's logs as soon as its first line arrives
+
+```typescript
+const showContext = isRunning && runningLines.length === 0 && !!lastNode;
+// render: showContext ? lastNode's lines (opacity-40) : runningLines
+```
+
+---
+
+**NumPy 2.x breaks PyTorch < 2.2 silently**
+
+Any tool using `torch < 2.2` will fail with cryptic import errors (`ImportError: numpy.core._multiarray_umath`) if NumPy ≥ 2.0 is installed. Always pin `numpy<2` when installing tools that use older torch versions.
+
+---
+
+## 13. Shipping checklist
 
 ```
 [ ] tool.yaml has working defaults (drag-drop → Run works immediately)

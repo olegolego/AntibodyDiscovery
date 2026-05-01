@@ -12,6 +12,7 @@ const CATEGORY_META: Record<string, { label: string; color: string; order: numbe
   sequence_design:      { label: "Sequence Design",     color: "#34d399", order: 3 },
   sequence_embedding:   { label: "Sequence Embedding",  color: "#fb7185", order: 4 },
   docking:              { label: "Docking",             color: "#f97316", order: 5 },
+  molecular_dynamics:   { label: "Molecular Dynamics",  color: "#2dd4bf", order: 6 },
   compute:              { label: "Compute",             color: "#818cf8", order: 80 },
   toolbox:              { label: "Toolbox",             color: "#e879f9", order: 90 },
   debug:                { label: "Debug",               color: "#94a3b8", order: 99 },

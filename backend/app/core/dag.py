@@ -45,11 +45,15 @@ def topological_sort(pipeline: Pipeline) -> list[str]:
 
 def upstream_outputs(
     node_id: str, edges: list[PipelineEdge]
-) -> dict[str, str]:
-    """Return {input_port: 'upstream_node_id.output_port'} for a given node."""
-    result = {}
+) -> list[tuple[str, str]]:
+    """Return [(input_port, 'upstream_node_id.output_port'), ...] for a given node.
+
+    A list (not dict) so that multiple edges to the same input port (e.g. two
+    nodes both wired to the generic 'in' handle) are all included.
+    """
+    result = []
     for edge in edges:
         if _node_id_from_port(edge.target) == node_id:
             input_port = edge.target.split(".", 1)[1] if "." in edge.target else edge.target
-            result[input_port] = edge.source
+            result.append((input_port, edge.source))
     return result

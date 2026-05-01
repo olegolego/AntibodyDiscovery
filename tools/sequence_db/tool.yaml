@@ -1,0 +1,36 @@
+id: sequence_db
+name: Sequence Library
+version: "1.0.0"
+category: input
+description: >
+  Pull a VH/VL antibody sequence pair from the Sequence Library.
+  Drop-in replacement for Sequence Input — identical outputs, fully
+  compatible with all downstream nodes (ImmuneBuilder, ESMFold, etc.).
+  Sequences are embedded in the node at selection time.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: true
+    default: ""
+    description: VH sequence — populated by the library picker.
+
+  - name: light_chain
+    type: fasta
+    required: false
+    default: ""
+    description: VL sequence — populated by the library picker. Empty for nanobodies.
+
+outputs:
+  - name: heavy_chain
+    type: fasta
+    description: Heavy chain sequence passed downstream.
+
+  - name: light_chain
+    type: fasta
+    description: Light chain sequence passed downstream.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 5

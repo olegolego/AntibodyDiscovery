@@ -11,7 +11,7 @@ export function useRun(runId: string | null) {
   return useQuery<Run>({
     queryKey: ["run", runId],
     queryFn: async () => {
-      const { data } = await api.get<Run>(`/runs/${runId}`);
+      const { data } = await api.get<Run>(`/runs/${runId}/`);
       return data;
     },
     enabled: runId !== null,
