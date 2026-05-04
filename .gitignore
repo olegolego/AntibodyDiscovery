@@ -52,6 +52,7 @@ tools/*/cache.db
 
 # Cloned repos inside project
 frontend/AntibodyDiscovery/
+tools/superwater/SuperWater/
 
 # IDE
 .idea/

@@ -4,19 +4,19 @@
 Reads JSON from stdin, writes JSON to stdout.
 Progress lines go to stderr → forwarded live to the UI terminal.
 
-Pipeline (mirrors the SuperWater repo):
-  1. Write input PDB to temp dir
-  2. Run organize_protein.py → normalise chains / residue numbering
-  3. Run esm_embeddings.py → ESM2 embeddings for each residue
-  4. Run inference_water_pos.py → place waters
-  5. Read centroid output PDB, return as hydrated_structure
+Mirrors the webapp/app.py pipeline exactly:
+  1. organize_pdb_dataset.py — normalise chains, create split file
+  2. esm_embedding_preparation_water.py — build FASTA
+  3. esm/scripts/extract.py — ESM2 embeddings (runs in data/ cwd)
+  4. python -m inference_water_pos — diffusion inference
+  5. Read centroid PDB, return as hydrated_structure
 """
 import json
 import os
 import shutil
 import subprocess
 import sys
-import tempfile
+import uuid
 from pathlib import Path
 
 
@@ -24,26 +24,29 @@ def _progress(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
-def _run(cmd: list[str], cwd: str, env: dict) -> None:
-    """Run a subprocess, stream stdout+stderr to our stderr."""
+def _run(cmd: list, cwd: str, env: dict, label: str) -> None:
+    """Run a command, stream its output to stderr."""
+    _progress(f"[{label}] {' '.join(str(c) for c in cmd)}")
     proc = subprocess.Popen(
-        cmd, cwd=cwd,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        env=env, text=True,
+        [str(c) for c in cmd],
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        text=True,
     )
     assert proc.stdout is not None
     for line in proc.stdout:
         _progress(line.rstrip())
     proc.wait()
     if proc.returncode != 0:
-        raise RuntimeError(f"Command failed (exit {proc.returncode}): {' '.join(cmd)}")
+        raise RuntimeError(f"[{label}] failed with exit code {proc.returncode}")
 
 
 def _find_repo() -> Path:
-    """Locate the cloned SuperWater repo next to this tool dir."""
     tool_dir = Path(__file__).resolve().parent
     candidate = tool_dir / "SuperWater"
-    if not candidate.exists():
+    if not (candidate / "inference_water_pos.py").exists():
         raise RuntimeError(
             "SuperWater repo not found. Run: bash tools/superwater/setup.sh"
         )
@@ -51,10 +54,6 @@ def _find_repo() -> Path:
 
 
 def _find_python() -> str:
-    """Return the conda env python or venv python, whichever was set up."""
-    tool_dir = Path(__file__).resolve().parent
-
-    # Prefer conda env
     conda_roots = [
         os.path.expanduser("~/miniforge3"),
         os.path.expanduser("~/mambaforge"),
@@ -65,14 +64,8 @@ def _find_python() -> str:
         py = Path(root) / "envs" / "superwater" / "bin" / "python"
         if py.exists():
             return str(py)
-
-    # Fallback: .venv next to this file
-    venv_py = tool_dir / ".venv" / "bin" / "python"
-    if venv_py.exists():
-        return str(venv_py)
-
     raise RuntimeError(
-        "No superwater Python environment found. Run: bash tools/superwater/setup.sh"
+        "No superwater conda env found. Run: bash tools/superwater/setup.sh"
     )
 
 
@@ -80,95 +73,132 @@ def main() -> None:
     inputs = json.load(sys.stdin)
 
     pdb_text    = inputs.get("structure", "")
-    water_ratio = float(inputs.get("water_ratio", 1.0))
-    cap         = float(inputs.get("cap", 0.1))
+    water_ratio = str(inputs.get("water_ratio", 1.0))
+    cap         = str(inputs.get("cap", 0.1))
 
     if not pdb_text or "ATOM" not in pdb_text:
         print(json.dumps({"error": "structure input is empty or contains no ATOM records"}))
         sys.exit(1)
 
-    repo_dir = _find_repo()
-    python   = _find_python()
+    repo  = _find_repo()
+    python = _find_python()
 
-    with tempfile.TemporaryDirectory(prefix="superwater_") as tmpdir:
-        tmp = Path(tmpdir)
+    # Unique run-scoped directory names to allow concurrent runs
+    run_id   = uuid.uuid4().hex[:8]
+    raw_name = f"sw{run_id}"    # e.g. sw3f7a2c1b
+    pdb_id   = "prot"           # 4-char PDB ID used throughout
+    org_name = f"{raw_name}_organized"
 
-        # Write input PDB
-        pdb_name = "input"
-        raw_pdb  = tmp / f"{pdb_name}.pdb"
-        raw_pdb.write_text(pdb_text)
+    env = {**os.environ, "PYTHONPATH": str(repo), "PYTHONUNBUFFERED": "1"}
 
-        # Copy workdir (model weights) — symlink if large
-        repo_workdir = repo_dir / "workdir"
-        local_workdir = tmp / "workdir"
-        if repo_workdir.exists():
-            os.symlink(str(repo_workdir), str(local_workdir))
+    # Directories (all relative to repo root, as the scripts expect)
+    raw_dir = repo / "data" / raw_name
+    raw_dir.mkdir(parents=True, exist_ok=True)
 
-        # Setup env — forward PATH so conda shims work
-        env = {**os.environ, "PYTHONPATH": str(repo_dir)}
+    # Initialize cleanup vars before try so finally block can reference them safely
+    emb_out  = f"{org_name}_embeddings_output"
+    # inference_water_pos hardcodes output to inference_out/inferenced_pos_rr{ratio*steps}_cap{cap}/
+    # water_ratio * resample_steps (default 1) = water_ratio
+    pred_dir = f"inferenced_pos_rr{water_ratio}_cap{cap}"
 
+    # Step 0: write input PDB
+    (raw_dir / f"{pdb_id}.pdb").write_text(pdb_text)
+    _progress(f"SuperWater [0/4]: wrote input PDB as {pdb_id}.pdb in {raw_dir}")
+
+    try:
         # Step 1: organise
-        _progress(f"SuperWater [1/3]: organising protein {pdb_name}…")
-        organised_dir = tmp / "organised"
-        organised_dir.mkdir()
+        _progress(f"SuperWater [1/4]: organising dataset {raw_name}…")
         _run(
-            [python, str(repo_dir / "organize_protein.py"),
-             "--input_dir", str(tmp),
-             "--output_dir", str(organised_dir)],
-            cwd=str(repo_dir), env=env,
+            [python, "organize_pdb_dataset.py",
+             "--raw_data",       raw_name,
+             "--data_root",      "data",
+             "--output_dir",     org_name,
+             "--splits_path",    "data/splits",
+             "--dummy_water_dir","data/dummy_water",
+             "--logs_dir",       "logs"],
+            cwd=str(repo), env=env, label="organize",
         )
 
-        # organised outputs land in organised_dir/<pdb_name>/<pdb_name>_organised.pdb
-        # or directly as <pdb_name>.pdb — find it
-        organised_pdb_candidates = list(organised_dir.rglob("*.pdb"))
-        if not organised_pdb_candidates:
-            raise RuntimeError("organize_protein.py produced no PDB output")
-        organised_pdb = organised_pdb_candidates[0]
-
-        # Step 2: ESM embeddings
-        _progress("SuperWater [2/3]: computing ESM2 embeddings…")
-        emb_dir = tmp / "embeddings"
-        emb_dir.mkdir()
+        # Step 2: prepare FASTA for ESM
+        _progress("SuperWater [2/4]: preparing ESM FASTA…")
+        fasta_file = f"prepared_for_esm_{org_name}.fasta"
         _run(
-            [python, str(repo_dir / "esm_embeddings.py"),
-             "--input_dir", str(organised_dir),
-             "--output_dir", str(emb_dir)],
-            cwd=str(repo_dir), env=env,
+            [python, "datasets/esm_embedding_preparation_water.py",
+             "--data_dir", f"data/{org_name}",
+             "--out_file",  f"data/{fasta_file}"],
+            cwd=str(repo), env=env, label="esm_prep",
         )
 
-        # Step 3: inference
-        _progress(f"SuperWater [3/3]: placing waters (ratio={water_ratio}, cap={cap})…")
-        out_dir = tmp / "inference_out"
-        out_dir.mkdir()
+        # Step 3: ESM2 embeddings — must run from data/ with relative paths
+        _progress("SuperWater [3/4]: computing ESM2 embeddings (downloads ~650M model on first run)…")
+        esm_extract = repo / "esm" / "scripts" / "extract.py"
         _run(
-            [python, str(repo_dir / "inference_water_pos.py"),
-             "--protein_dir",    str(organised_dir),
-             "--embedding_dir",  str(emb_dir),
-             "--output_dir",     str(out_dir),
-             "--water_ratio",    str(water_ratio),
-             "--cap",            str(cap)],
-            cwd=str(repo_dir), env=env,
+            [python, str(esm_extract),
+             "esm2_t33_650M_UR50D",
+             fasta_file,
+             emb_out,
+             "--repr_layers", "33",
+             "--include", "per_tok",
+             "--truncation_seq_length", "4096"],
+            cwd=str(repo / "data"), env=env, label="esm_extract",
         )
 
-        # Find centroid PDB output
-        centroid_pdbs = sorted(out_dir.rglob("*_centroid.pdb"))
-        if not centroid_pdbs:
-            # Fallback: any PDB in out_dir
-            centroid_pdbs = sorted(out_dir.rglob("*.pdb"))
-        if not centroid_pdbs:
-            raise RuntimeError("SuperWater produced no output PDB")
+        # Step 4: inference
+        # Output goes to inference_out/inferenced_pos_rr{ratio}_cap{cap}/ (hardcoded in script)
+        _progress(f"SuperWater [4/4]: running diffusion inference (ratio={water_ratio}, cap={cap})…")
+        _run(
+            [python, "-m", "inference_water_pos",
+             "--original_model_dir", "workdir/all_atoms_score_model_res15_17092",
+             "--confidence_dir",     "workdir/confidence_model_17092_sigmoid_rr15",
+             "--data_dir",           f"data/{org_name}",
+             "--ckpt",               "best_model.pt",
+             "--all_atoms",
+             "--cache_path",         "data/cache_confidence",
+             "--split_test",         f"data/splits/{org_name}.txt",
+             "--inference_steps",    "20",
+             "--esm_embeddings_path", f"data/{emb_out}",
+             "--cap",                cap,
+             "--running_mode",       "test",
+             "--mad_prediction",
+             "--save_pos",
+             "--water_ratio",        water_ratio],
+            cwd=str(repo), env=env, label="inference",
+        )
 
-        hydrated_pdb = centroid_pdbs[0].read_text()
+        # Find output — inference writes to inference_out/<pred_dir>/<pdb_id>/<pdb_id>_centroid.pdb
+        centroid = repo / "inference_out" / pred_dir / pdb_id / f"{pdb_id}_centroid.pdb"
+        if not centroid.exists():
+            # Fallback: any PDB in that directory
+            candidates = sorted((repo / "inference_out" / pred_dir).rglob("*.pdb"))
+            if not candidates:
+                raise RuntimeError(
+                    f"No output PDB found in inference_out/{pred_dir}. "
+                    f"Check the inference log above for errors."
+                )
+            centroid = candidates[0]
 
-        # Count HOH records
-        water_lines = [l for l in hydrated_pdb.splitlines() if "HOH" in l and l.startswith("HETATM")]
-        n_waters = len(water_lines)
+        hydrated_pdb = centroid.read_text()
+        water_lines  = [l for l in hydrated_pdb.splitlines() if "HOH" in l and l.startswith("HETATM")]
+        n_waters     = len(water_lines)
         _progress(f"SuperWater: placed {n_waters} water molecules")
 
         print(json.dumps({
             "hydrated_structure": hydrated_pdb,
-            "water_count": {"waters_placed": n_waters, "cap": cap, "water_ratio": water_ratio},
+            "water_count": {"waters_placed": n_waters, "cap": float(cap), "water_ratio": float(water_ratio)},
         }))
+
+    finally:
+        # Clean up run-specific dirs to avoid accumulation
+        for d in [raw_dir, repo / "data" / org_name]:
+            shutil.rmtree(str(d), ignore_errors=True)
+        for p in [
+            repo / "data" / f"prepared_for_esm_{org_name}.fasta",
+            repo / "data" / "splits" / f"{org_name}.txt",
+        ]:
+            p.unlink(missing_ok=True)
+        # Remove embeddings (can be large)
+        shutil.rmtree(str(repo / "data" / emb_out), ignore_errors=True)  # type: ignore[possibly-undefined]
+        # Keep inference_out for debugging; remove on next run if needed
 
 
 if __name__ == "__main__":

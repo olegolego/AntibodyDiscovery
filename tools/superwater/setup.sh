@@ -58,8 +58,34 @@ echo "Installing fair-esm…"
 "$CONDA_PIP" install -q fair-esm
 
 # ── Install remaining dependencies ───────────────────────────────────────────
-echo "Installing biopython and other deps…"
-"$CONDA_PIP" install -q biopython numpy scipy
+echo "Installing rdkit (conda-forge)…"
+"$CONDA_CMD" install -n "$ENV_NAME" -c conda-forge rdkit openbabel -y -q
+
+echo "Installing biopython, scikit-learn, wandb, pandas, and other deps…"
+"$CONDA_PIP" install -q biopython numpy scipy scikit-learn wandb tqdm pyyaml pandas
+
+echo "Installing torch extensions for torch 2.5.1 CPU…"
+"$CONDA_PIP" install -q torch-cluster torch-scatter torch-sparse \
+  -f https://data.pyg.org/whl/torch-2.5.1+cpu.html
+
+echo "Installing torch-geometric 2.6.1 (pinned — 2.7+ has iteration API changes)…"
+"$CONDA_PIP" install -q "torch-geometric==2.6.1"
+
+echo "Installing e3nn 0.5.3, einops, spyrmsd, opt-einsum…"
+"$CONDA_PIP" install -q "e3nn==0.5.3" einops spyrmsd opt-einsum
+
+# ── Clone ESM repo (provides esm/scripts/extract.py required for embeddings) ──
+ESM_DIR="$REPO_DIR/esm"
+if [ ! -d "$ESM_DIR" ]; then
+  echo "Cloning ESM repo into SuperWater/esm/…"
+  git clone --depth 1 https://github.com/facebookresearch/esm.git "$ESM_DIR"
+else
+  echo "ESM repo already exists at $ESM_DIR — skipping clone"
+fi
+
+if [ ! -f "$ESM_DIR/scripts/extract.py" ]; then
+  echo "WARNING: esm/scripts/extract.py not found — ESM embedding step may fail"
+fi
 
 # ── Install repo package if setup.py/pyproject.toml exists ───────────────────
 if [ -f "$REPO_DIR/setup.py" ] || [ -f "$REPO_DIR/pyproject.toml" ]; then
