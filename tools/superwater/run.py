@@ -73,8 +73,8 @@ def main() -> None:
     inputs = json.load(sys.stdin)
 
     pdb_text    = inputs.get("structure", "")
-    water_ratio = str(inputs.get("water_ratio", 1.0))
-    cap         = str(inputs.get("cap", 0.1))
+    water_ratio = str(int(float(inputs.get("water_ratio", 1.0))))  # script expects int
+    cap         = str(float(inputs.get("cap", 0.1)))
 
     if not pdb_text or "ATOM" not in pdb_text:
         print(json.dumps({"error": "structure input is empty or contains no ATOM records"}))
