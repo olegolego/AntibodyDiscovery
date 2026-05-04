@@ -1,0 +1,45 @@
+id: superwater
+name: SuperWater
+version: "1.0.0"
+category: toolbox
+description: >
+  Predict crystallographic water molecule positions using a score-based diffusion
+  model with ESM2 embeddings (SuperWater, Kuang et al.). Adds structurally important
+  waters back to a PDB — useful before docking refinement or MD equilibration.
+  Requires a conda environment; run tools/superwater/setup.sh first.
+
+inputs:
+  - name: structure
+    type: pdb
+    required: true
+    description: "Input PDB (protein only, no existing waters). Typically from PDBFixer or ImmuneBuilder."
+
+  - name: water_ratio
+    type: float
+    required: false
+    default: 1.0
+    description: >
+      Ratio of predicted waters to protein residues. Paper used 15 for crystals;
+      1.0 is a conservative default for solution structures.
+
+  - name: cap
+    type: float
+    required: false
+    default: 0.1
+    description: >
+      Probability cutoff for keeping a predicted water (0.02–0.5).
+      Higher = fewer, higher-confidence waters. 0.1 is a balanced default.
+
+outputs:
+  - name: hydrated_structure
+    type: pdb
+    description: "Input structure with predicted water molecules added as HETATM HOH records."
+
+  - name: water_count
+    type: json
+    description: "Number of waters placed and summary statistics."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 600

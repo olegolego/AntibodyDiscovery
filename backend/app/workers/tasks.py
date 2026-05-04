@@ -21,6 +21,8 @@ _ADAPTER_MAP = {
     "equidock":          ("app.tools.adapters.equidock",  "EquiDockAdapter"),
     "megadock":          ("app.tools.adapters.megadock",  "MEGADOCKAdapter"),
     "gromacs_mmpbsa":    ("app.tools.adapters.gromacs",   "GROMACSAdapter"),
+    "pdbfixer":          ("app.tools.adapters.pdbfixer",  "PDBFixerAdapter"),
+    "superwater":        ("app.tools.adapters.superwater","SuperWaterAdapter"),
     "compute":           ("app.tools.adapters.compute",   "ComputeAdapter"),
     "custom_dnn":        ("app.tools.adapters.toolbox",   "ToolboxAdapter"),
     "diffusion_design":  ("app.tools.adapters.toolbox",   "ToolboxAdapter"),

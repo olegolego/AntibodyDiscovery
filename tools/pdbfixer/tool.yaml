@@ -1,0 +1,58 @@
+id: pdbfixer
+name: PDBFixer
+version: "1.9.0"
+category: toolbox
+description: >
+  Fix and clean PDB structures using OpenMM's PDBFixer. Fills missing residues
+  and atoms, removes heterogens (waters, ligands), standardises atom names, and
+  optionally adds hydrogens. Run this before docking or MD to avoid topology errors.
+
+inputs:
+  - name: structure
+    type: pdb
+    required: true
+    description: "Input PDB structure to fix."
+
+  - name: fix_missing_residues
+    type: bool
+    required: false
+    default: true
+    description: "Model missing residue loops (uses Modeller internally)."
+
+  - name: fix_missing_atoms
+    type: bool
+    required: false
+    default: true
+    description: "Add missing heavy atoms to existing residues."
+
+  - name: remove_heterogens
+    type: bool
+    required: false
+    default: true
+    description: "Strip HETATM records (waters, ligands, ions)."
+
+  - name: add_hydrogens
+    type: bool
+    required: false
+    default: false
+    description: "Add missing hydrogen atoms. pH-dependent; leave false for GROMACS (it adds its own)."
+
+  - name: ph
+    type: float
+    required: false
+    default: 7.0
+    description: "pH used when add_hydrogens is true (affects protonation states)."
+
+outputs:
+  - name: fixed_structure
+    type: pdb
+    description: "Cleaned and repaired PDB."
+
+  - name: report
+    type: json
+    description: "Summary: chains found, residues added, atoms added, heterogens removed."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 120
