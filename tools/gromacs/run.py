@@ -252,41 +252,37 @@ def _regenerate_reference_pdb(
 # ── Complex pre-processing ────────────────────────────────────────────────────
 
 def _prepare_complex_pdb(pdb_text: str) -> str:
-    """Strip MODEL/ENDMDL and translate chains to be within docking distance.
+    """Strip MODEL/ENDMDL and translate chains displaced by MEGADOCK grid positioning.
 
-    MEGADOCK outputs the docked ligand at an arbitrary grid position that can
-    be 20-40 nm from the receptor.  Writing that directly to GROMACS causes a
-    multi-GB solvation box and a fatal 'excluded atoms > cutoff' NVT error.
+    MEGADOCK places the docked structure at an arbitrary FFT grid offset — often
+    20-40 nm from the receptor — causing a multi-GB solvation box and a fatal
+    'excluded atoms > cutoff' NVT error.
 
-    Fix:
-      1. Remove MODEL / ENDMDL markers that confuse pdb2gmx chain detection.
-      2. Parse Cα centroids per chain.
-      3. If any chain centroid is >5 nm from the receptor-chain centroid,
-         translate that chain to sit ~1 nm off the receptor surface.
+    Two-pass approach:
+      Pass 1: collect Cα centroids per chain, build per-chain translation vectors.
+      Pass 2: re-stream the ORIGINAL lines in order (preserving TER/END between
+              chains so pdb2gmx never sees a phantom cross-chain peptide bond),
+              applying coordinate translations in-place.
     """
     import math
 
-    lines_out: list[str] = []
-    chain_ca: dict[str, list] = {}   # chain → list of (x,y,z,line_index)
-    atom_lines: list[str] = []
+    # ── Pass 1: centroids ────────────────────────────────────────────────────────
+    chain_ca: dict[str, list] = {}
+    has_atoms = False
 
     for line in pdb_text.splitlines():
-        if line.startswith(("MODEL", "ENDMDL")):
+        if not line.startswith(("ATOM", "HETATM")):
             continue
-        if line.startswith(("ATOM", "HETATM")):
-            ch = line[21] if len(line) > 21 else " "
+        has_atoms = True
+        ch = line[21] if len(line) > 21 else " "
+        if line[13:16].strip() == "CA":
             try:
                 x, y, z = float(line[30:38]), float(line[38:46]), float(line[46:54])
-            except ValueError:
-                atom_lines.append(line)
-                continue
-            if line[13:16].strip() == "CA":
                 chain_ca.setdefault(ch, []).append([x, y, z])
-            atom_lines.append(line)
-        else:
-            lines_out.append(line)   # TER, END, CONECT, etc.
+            except ValueError:
+                pass
 
-    if not atom_lines:
+    if not has_atoms or not chain_ca:
         return pdb_text
 
     def centroid(pts: list) -> list:
@@ -296,30 +292,20 @@ def _prepare_complex_pdb(pdb_text: str) -> str:
     def dist(a: list, b: list) -> float:
         return math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
 
-    # Identify "receptor" chains as the most populated chain(s)
-    sorted_chains = sorted(chain_ca.keys(), key=lambda c: -len(chain_ca[c]))
-    if not sorted_chains:
-        return "\n".join(atom_lines + lines_out) + "\n"
-
-    ref_chain = sorted_chains[0]
+    # Reference = chain with the most Cα atoms (usually the target protein)
+    ref_chain = max(chain_ca, key=lambda c: len(chain_ca[c]))
     ref_cen   = centroid(chain_ca[ref_chain])
 
-    # Build per-chain translation vectors
     translations: dict[str, list] = {}
     for ch, pts in chain_ca.items():
-        if ch == ref_chain:
-            translations[ch] = [0.0, 0.0, 0.0]
-            continue
         cen = centroid(pts)
         d   = dist(cen, ref_cen)
-        # > 50 Å  = likely in wrong grid position — translate back
-        if d > 50.0:
+        if d > 50.0:  # > 50 Å → MEGADOCK grid displacement
             _progress(
                 f"  ⚠ Chain {ch!r} centroid is {d:.1f} Å from receptor — "
                 "translating to docking contact distance"
             )
-            # Move chain centroid to 15 Å from receptor centroid
-            scale = 15.0 / d if d > 0 else 1.0
+            scale = 15.0 / d
             translations[ch] = [
                 ref_cen[i] + (cen[i] - ref_cen[i]) * scale - cen[i]
                 for i in range(3)
@@ -327,22 +313,28 @@ def _prepare_complex_pdb(pdb_text: str) -> str:
         else:
             translations[ch] = [0.0, 0.0, 0.0]
 
-    # Apply translations to atom lines
+    # ── Pass 2: stream original lines in order, apply translations in-place ─────
+    # Keeping TER/END/CONECT records at their original positions is critical —
+    # moving them to the end would fuse separate chains into one polypeptide in
+    # pdb2gmx, creating phantom cross-chain bonds spanning hundreds of Angstroms.
     result: list[str] = []
-    for line in atom_lines:
-        ch = line[21] if len(line) > 21 else " "
-        tx = translations.get(ch, [0.0, 0.0, 0.0])
-        if any(abs(t) > 0.001 for t in tx):
-            try:
-                x = float(line[30:38]) + tx[0]
-                y = float(line[38:46]) + tx[1]
-                z = float(line[46:54]) + tx[2]
-                line = f"{line[:30]}{x:8.3f}{y:8.3f}{z:8.3f}{line[54:]}"
-            except ValueError:
-                pass
+    for line in pdb_text.splitlines():
+        if line.startswith(("MODEL", "ENDMDL")):
+            continue  # strip multi-model markers
+        if line.startswith(("ATOM", "HETATM")):
+            ch = line[21] if len(line) > 21 else " "
+            tx = translations.get(ch, [0.0, 0.0, 0.0])
+            if any(abs(t) > 0.001 for t in tx):
+                try:
+                    x = float(line[30:38]) + tx[0]
+                    y = float(line[38:46]) + tx[1]
+                    z = float(line[46:54]) + tx[2]
+                    line = f"{line[:30]}{x:8.3f}{y:8.3f}{z:8.3f}{line[54:]}"
+                except ValueError:
+                    pass
         result.append(line)
 
-    return "\n".join(result + lines_out) + "\n"
+    return "\n".join(result) + "\n"
 
 
 # ── MD pipeline steps ──────────────────────────────────────────────────────────

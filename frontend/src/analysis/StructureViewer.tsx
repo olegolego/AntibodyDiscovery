@@ -29,8 +29,8 @@ function baseParams(color: ColorScheme, rep: RepType): Record<string, unknown> {
     colorScheme: color === "electrostatic" ? "electrostatic" : color,
     smoothSheet: true,
   };
-  if (color === "bfactor") { p.colorScale = "RdYlBu"; p.colorReverse = true; }
-  if (color === "electrostatic") { p.colorScale = "RdBu"; p.colorReverse = true; }
+  if (color === "bfactor")      { p.colorScale = "RdYlBu"; p.colorReverse = true; }
+  if (color === "electrostatic"){ p.colorScale = "RdBu";   p.colorReverse = true; }
   if (rep === "cartoon")    { p.aspectRatio = 5; p.tubeDiameter = 0.4; }
   if (rep === "surface")    { p.opacity = 0.82; p.clipNear = 0; }
   if (rep === "ball+stick") { p.multipleBond = true; p.bondScale = 0.3; p.radiusScale = 0.5; }
@@ -38,11 +38,12 @@ function baseParams(color: ColorScheme, rep: RepType): Record<string, unknown> {
 }
 
 export function StructureViewer({ pdbText }: Props) {
-  // NGL mounts its canvas directly inside this div
+  // containerRef is the NGL host — separate from React-managed children
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef     = useRef<any>(null);
   const compRef      = useRef<any>(null);
   const repObjRef    = useRef<any>(null);
+  const loadedRef    = useRef(false); // mirrors loaded state for callbacks
 
   const [color,  setColor]  = useState<ColorScheme>("chainname");
   const [rep,    setRep]    = useState<RepType>("cartoon");
@@ -52,15 +53,18 @@ export function StructureViewer({ pdbText }: Props) {
   const colorRef = useRef(color);
   const repRef   = useRef(rep);
   useEffect(() => { colorRef.current = color; }, [color]);
-  useEffect(() => { repRef.current = rep; },   [rep]);
+  useEffect(() => { repRef.current   = rep;   }, [rep]);
+  useEffect(() => { loadedRef.current = loaded; }, [loaded]);
 
-  // ── Create stage once, dispose on unmount ────────────────────────────────────
+  // ── Mount NGL stage once ──────────────────────────────────────────────────────
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     import("ngl").then((NGL) => {
-      if (!containerRef.current) return; // unmounted while importing
+      // Guard against StrictMode double-mount or unmount-during-import
+      if (!containerRef.current || stageRef.current) return;
+
       const stage = new NGL.Stage(container, {
         backgroundColor: "#080d1c",
         quality: "high",
@@ -73,19 +77,25 @@ export function StructureViewer({ pdbText }: Props) {
       });
       stageRef.current = stage;
 
-      // Keep canvas in sync with container size
+      // Sync canvas to whatever the container already measures
+      stage.handleResize();
+
+      const onWinResize = () => { if (stageRef.current) stageRef.current.handleResize(); };
+      window.addEventListener("resize", onWinResize);
+
+      // After any container resize: resize canvas AND re-center the loaded structure
       const ro = new ResizeObserver(() => {
-        if (stageRef.current) stageRef.current.handleResize();
+        if (!stageRef.current) return;
+        stageRef.current.handleResize();
+        if (compRef.current && loadedRef.current) compRef.current.autoView();
       });
       ro.observe(container);
-      const onWindowResize = () => { if (stageRef.current) stageRef.current.handleResize(); };
-      window.addEventListener("resize", onWindowResize);
 
       if (pdbText) _load(stage, pdbText);
 
       (stage as any).__cleanup = () => {
         ro.disconnect();
-        window.removeEventListener("resize", onWindowResize);
+        window.removeEventListener("resize", onWinResize);
       };
     });
 
@@ -94,8 +104,9 @@ export function StructureViewer({ pdbText }: Props) {
         (stageRef.current as any).__cleanup?.();
         stageRef.current.dispose();
         stageRef.current = null;
-        compRef.current  = null;
+        compRef.current   = null;
         repObjRef.current = null;
+        loadedRef.current = false;
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -108,7 +119,7 @@ export function StructureViewer({ pdbText }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdbText]);
 
-  // ── Color — in-place parameter update (no remove+add) ────────────────────────
+  // ── Color — in-place update, no remove+add ────────────────────────────────────
   useEffect(() => {
     if (!repObjRef.current || !loaded) return;
     repObjRef.current.setParameters(baseParams(colorRef.current, repRef.current));
@@ -136,6 +147,7 @@ export function StructureViewer({ pdbText }: Props) {
 
   function _load(stage: any, text: string) {
     setLoaded(false);
+    loadedRef.current = false;
     compRef.current   = null;
     repObjRef.current = null;
     stage.removeAllComponents();
@@ -145,25 +157,27 @@ export function StructureViewer({ pdbText }: Props) {
       .loadFile(blob as File, { ext: "pdb", defaultRepresentation: false })
       .then((component: any) => {
         if (!component || stage !== stageRef.current) return;
-        compRef.current = component;
+        compRef.current   = component;
         repObjRef.current = component.addRepresentation(
           repRef.current,
           baseParams(colorRef.current, repRef.current),
         );
+        // handleResize before autoView so the camera distance is computed
+        // against the actual canvas dimensions (not a 0×0 initial canvas)
+        stage.handleResize();
         component.autoView();
         setLoaded(true);
+        loadedRef.current = true;
       })
       .catch(() => {});
   }
 
   return (
-    // containerRef IS the NGL host — NGL appends its <canvas> directly here
-    <div
-      ref={containerRef}
-      className="relative w-full h-full rounded-xl overflow-hidden"
-      style={{ minHeight: 280 }}
-    >
-      {/* Floating toolbar — z-10 so it sits above NGL canvas */}
+    <div className="relative w-full h-full" style={{ minHeight: 280 }}>
+      {/* NGL host — separate div so NGL's canvas doesn't mix with React's children */}
+      <div ref={containerRef} className="absolute inset-0 rounded-xl" />
+
+      {/* Toolbar — z-10 renders above NGL canvas */}
       {loaded && (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10
           flex items-center gap-1 flex-wrap justify-center
@@ -217,7 +231,10 @@ export function StructureViewer({ pdbText }: Props) {
           </button>
 
           <button
-            onClick={() => compRef.current?.autoView(400)}
+            onClick={() => {
+              stageRef.current?.handleResize();
+              compRef.current?.autoView(400);
+            }}
             title="Reset view"
             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-white/5
               border border-transparent transition-colors"
