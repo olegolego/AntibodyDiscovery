@@ -2,12 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import ReactDOM from "react-dom";
 import { BookOpen, Search, X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import {
-  listCollections,
-  getCollection,
-  type SequenceCollection,
-  type SequenceEntry,
-} from "@/api/sequences";
+import { listDatasets, getDataset, type Dataset, type DatasetEntry } from "@/api/datasets";
 
 function seqPreview(seq: string | null, len = 20): string {
   if (!seq) return "—";
@@ -15,32 +10,32 @@ function seqPreview(seq: string | null, len = 20): string {
 }
 
 interface Props {
-  onSelect: (entry: SequenceEntry) => void;
+  onSelect: (entry: DatasetEntry) => void;
   onClose: () => void;
 }
 
 export function SequencePickerModal({ onSelect, onClose }: Props) {
-  const [selectedCollId, setSelectedCollId] = useState<string | null>(null);
+  const [selectedDsId, setSelectedDsId] = useState<string | null>(null);
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const searchTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const { data: collections } = useQuery({
-    queryKey: ["seq-collections"],
-    queryFn: listCollections,
+  const { data: datasets } = useQuery({
+    queryKey: ["datasets"],
+    queryFn: listDatasets,
   });
 
   const { data: detail } = useQuery({
-    queryKey: ["seq-collection", selectedCollId, debouncedQ],
-    queryFn: () => selectedCollId ? getCollection(selectedCollId) : Promise.resolve(null),
-    enabled: !!selectedCollId,
+    queryKey: ["dataset", selectedDsId],
+    queryFn: () => selectedDsId ? getDataset(selectedDsId) : Promise.resolve(null),
+    enabled: !!selectedDsId,
   });
 
   useEffect(() => {
-    if (collections?.length && !selectedCollId) {
-      setSelectedCollId(collections[0].id);
+    if (datasets?.length && !selectedDsId) {
+      setSelectedDsId(datasets[0].id);
     }
-  }, [collections, selectedCollId]);
+  }, [datasets, selectedDsId]);
 
   function handleSearch(value: string) {
     setQ(value);
@@ -48,13 +43,12 @@ export function SequencePickerModal({ onSelect, onClose }: Props) {
     searchTimer.current = setTimeout(() => setDebouncedQ(value), 300);
   }
 
-  const entries = debouncedQ
-    ? (detail?.entries ?? []).filter(
-        (e) =>
-          (e.name ?? "").toLowerCase().includes(debouncedQ.toLowerCase()) ||
-          e.heavy_chain.toLowerCase().includes(debouncedQ.toLowerCase())
-      )
-    : (detail?.entries ?? []);
+  const entries = (detail?.entries ?? []).filter((e) => {
+    if (!e.heavy_chain) return false;
+    if (!debouncedQ) return true;
+    const q = debouncedQ.toLowerCase();
+    return (e.name ?? "").toLowerCase().includes(q) || (e.heavy_chain ?? "").toLowerCase().includes(q);
+  });
 
   const modal = (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60"
@@ -75,31 +69,31 @@ export function SequencePickerModal({ onSelect, onClose }: Props) {
         </div>
 
         <div className="flex flex-1 overflow-hidden">
-          {/* Left: collections */}
+          {/* Left: dataset list */}
           <div className="w-48 shrink-0 border-r border-border flex flex-col overflow-hidden">
             <div className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-500 border-b border-border shrink-0">
-              Collections
+              Datasets
             </div>
             <div className="flex-1 overflow-y-auto">
-              {!collections?.length && (
+              {!datasets?.length && (
                 <div className="px-3 py-4 text-xs text-slate-600 text-center leading-relaxed">
-                  No collections yet.
+                  No datasets yet.
                   <br />
                   <span className="text-amber-500/70">Create one in Datasets.</span>
                 </div>
               )}
-              {collections?.map((col: SequenceCollection) => (
+              {datasets?.map((ds: Dataset) => (
                 <button
-                  key={col.id}
-                  onClick={() => { setSelectedCollId(col.id); setQ(""); setDebouncedQ(""); }}
+                  key={ds.id}
+                  onClick={() => { setSelectedDsId(ds.id); setQ(""); setDebouncedQ(""); }}
                   className={`w-full text-left px-3 py-2.5 border-b border-border/50 last:border-0
                     transition-colors text-xs
-                    ${selectedCollId === col.id
+                    ${selectedDsId === ds.id
                       ? "bg-amber-500/10 text-amber-300 border-l-2 border-l-amber-400"
                       : "text-slate-300 hover:bg-surface2"}`}
                 >
-                  <div className="font-medium truncate">{col.name}</div>
-                  <div className="text-slate-600 mt-0.5">{col.entry_count} sequences</div>
+                  <div className="font-medium truncate">{ds.name}</div>
+                  <div className="text-slate-600 mt-0.5">{ds.entry_count} entries</div>
                 </button>
               ))}
             </div>
@@ -122,15 +116,15 @@ export function SequencePickerModal({ onSelect, onClose }: Props) {
 
             {/* Entry list */}
             <div className="flex-1 overflow-y-auto">
-              {!selectedCollId && (
-                <div className="p-6 text-xs text-slate-600 text-center">Select a collection</div>
+              {!selectedDsId && (
+                <div className="p-6 text-xs text-slate-600 text-center">Select a dataset</div>
               )}
-              {selectedCollId && entries.length === 0 && (
+              {selectedDsId && entries.length === 0 && (
                 <div className="p-6 text-xs text-slate-600 text-center">
-                  {debouncedQ ? "No matches" : "No sequences in this collection"}
+                  {debouncedQ ? "No matches" : "No sequences with VH in this dataset"}
                 </div>
               )}
-              {entries.map((entry: SequenceEntry) => (
+              {entries.map((entry: DatasetEntry) => (
                 <button
                   key={entry.id}
                   onClick={() => onSelect(entry)}

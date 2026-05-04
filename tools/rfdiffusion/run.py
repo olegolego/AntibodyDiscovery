@@ -89,11 +89,20 @@ def _run(inputs: dict) -> dict:
         ]
 
         if binder_mode:
+            complex_ckpt = _MODELS / "Complex_base_ckpt.pt"
+            if not complex_ckpt.exists():
+                raise FileNotFoundError(
+                    f"Binder-design checkpoint not found: {complex_ckpt}\n"
+                    "Download it by re-running tools/rfdiffusion/setup.sh, or manually:\n"
+                    "  curl -L -o tools/rfdiffusion/models/Complex_base_ckpt.pt \\\n"
+                    "    http://files.ipd.uw.edu/pub/RFdiffusion/"
+                    "e29311f6f1bf1af907f9ef9f44b8328b/Complex_base_ckpt.pt"
+                )
             target_path = tmpdir / "target.pdb"
             target_path.write_text(raw_target)
             overrides += [
                 f"inference.input_pdb={target_path}",
-                f"inference.ckpt_override_path={_MODELS}/Complex_base_ckpt.pt",
+                f"inference.ckpt_override_path={complex_ckpt}",
                 f"contigmap.contigs=[{num_residues}-{num_residues}/0 A1-999]",
             ]
             if hotspot_res:

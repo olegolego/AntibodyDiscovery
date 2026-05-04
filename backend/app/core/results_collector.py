@@ -216,7 +216,7 @@ async def collect(
 
         molecule_id = await _get_or_create_molecule(run, seq_inputs)
 
-        if tool_id == "sequence_input":
+        if tool_id in ("sequence_input", "sequence_db"):
             await _collect_sequence_input(run, node_id, inputs, outputs)
         elif tool_id in _STRUCTURE_TOOLS:
             await _collect_structure(run, node_id, tool_id, inputs, outputs, molecule_id)

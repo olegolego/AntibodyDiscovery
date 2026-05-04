@@ -3,7 +3,7 @@ import { Handle, Position, type NodeProps } from "reactflow";
 import { BookOpen, Code2 } from "lucide-react";
 import { useCanvasStore, type NodeData } from "./store";
 import { SequencePickerModal } from "@/sequences/SequencePickerModal";
-import type { SequenceEntry } from "@/api/sequences";
+import type { DatasetEntry } from "@/api/datasets";
 
 const CATEGORY_STYLE: Record<string, { border: string; label: string; glow: string }> = {
   input:                { border: "#fbbf24", label: "text-amber-300",   glow: "rgba(251,191,36,0.25)"  },
@@ -178,8 +178,8 @@ export function SequenceDbNode({ id, data, selected }: NodeProps<NodeData>) {
   const heavy = String(data.params.heavy_chain ?? "");
   const light = String(data.params.light_chain ?? "");
 
-  function onSelect(entry: SequenceEntry) {
-    updateNodeParams(id, { ...data.params, heavy_chain: entry.heavy_chain, light_chain: entry.light_chain ?? "" });
+  function onSelect(entry: DatasetEntry) {
+    updateNodeParams(id, { ...data.params, heavy_chain: entry.heavy_chain ?? "", light_chain: entry.light_chain ?? "" });
     setPickerOpen(false);
   }
 

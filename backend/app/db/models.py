@@ -212,3 +212,38 @@ class SequenceEntryRow(Base):
     source_molecule_id: Mapped[str|None] = mapped_column(String(36), nullable=True)
     notes:              Mapped[str|None] = mapped_column(Text, nullable=True)
     created_at:         Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# ── Dataset system (replaces SequenceCollection with user-defined columns) ─────
+
+class DatasetRow(Base):
+    """A named table of antibody sequences with a user-defined schema.
+
+    columns is a JSON array of ColumnDef objects:
+      {id: str, name: str, type: "text"|"number"|"select"|"boolean", options?: str[], required?: bool}
+    The three built-in columns (name, heavy_chain, light_chain) are always present
+    and are NOT stored in this array.
+    """
+    __tablename__ = "datasets"
+
+    id:          Mapped[str]      = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name:        Mapped[str]      = mapped_column(String(255), nullable=False)
+    description: Mapped[str|None] = mapped_column(Text, nullable=True)
+    columns:     Mapped[str]      = mapped_column(Text, nullable=False, default="[]")  # JSON ColumnDef[]
+    created_at:  Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at:  Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DatasetEntryRow(Base):
+    """One row in a Dataset.  Built-in fields + arbitrary user data as JSON."""
+    __tablename__ = "dataset_entries"
+
+    id:                 Mapped[str]      = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    dataset_id:         Mapped[str]      = mapped_column(String(36), nullable=False, index=True)
+    name:               Mapped[str|None] = mapped_column(String(255), nullable=True)
+    heavy_chain:        Mapped[str|None] = mapped_column(Text, nullable=True)
+    light_chain:        Mapped[str|None] = mapped_column(Text, nullable=True)
+    source_molecule_id: Mapped[str|None] = mapped_column(String(36), nullable=True)
+    data:               Mapped[str]      = mapped_column(Text, nullable=False, default="{}")  # JSON {col_id: value}
+    created_at:         Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at:         Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

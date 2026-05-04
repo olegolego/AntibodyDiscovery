@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import analysis, artifacts, compute, pipelines, results, runs, sequences, tools, ws
+from app.api import analysis, artifacts, compute, datasets, pipelines, results, runs, sequences, tools, ws
 from app.config import settings
 from app.db.models import Base
 from app.db.session import engine
@@ -55,6 +55,7 @@ app.include_router(artifacts.router, prefix="/api/artifacts", tags=["artifacts"]
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 app.include_router(results.router, prefix="/api/results", tags=["results"])
 app.include_router(sequences.router, prefix="/api/sequences", tags=["sequences"])
+app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 app.include_router(ws.router, prefix="/ws", tags=["ws"])
 app.include_router(compute.router, prefix="/ws/compute", tags=["compute"])
 

@@ -466,6 +466,28 @@ def _energy_minimization(
     )
 
 
+def _make_whole_after_em(work_dir: Path, job_name: str, gmx: str) -> None:
+    """Run trjconv -pbc whole on the EM output.
+
+    EM can leave bonded atoms on opposite sides of the periodic box (split
+    molecule), which causes grompp to abort with 'excluded atoms > cutoff'.
+    Making the structure whole ensures all bonds are < box/2 before NVT.
+    """
+    whole_gro = work_dir / f"{job_name}_em_whole.gro"
+    if whole_gro.exists():
+        return
+    _run(
+        [gmx, "trjconv",
+         "-s", f"{job_name}_em.tpr",
+         "-f", f"{job_name}_em.gro",
+         "-o", whole_gro.name,
+         "-pbc", "whole"],
+        cwd=work_dir,
+        stdin_text="System\n",
+        label="trjconv:whole",
+    )
+
+
 def _run_nvt(
     work_dir: Path, job_name: str, temperature_k: float, nsteps: int, gmx: str,
 ) -> None:
@@ -476,6 +498,10 @@ def _run_nvt(
 
     nt = _n_threads()
     t = temperature_k
+    # Use the PBC-whole-corrected EM output to avoid 'excluded atoms > cutoff'.
+    whole_gro = work_dir / f"{job_name}_em_whole.gro"
+    em_input = whole_gro.name if whole_gro.exists() else f"{job_name}_em.gro"
+
     mdp = work_dir / f"{job_name}_nvt.mdp"
     mdp.write_text(
         f"define = -DPOSRES\nintegrator  = md\ndt          = 0.002\n"
@@ -490,8 +516,8 @@ def _run_nvt(
     _run(
         [gmx, "grompp",
          "-f", mdp.name,
-         "-c", f"{job_name}_em.gro",
-         "-r", f"{job_name}_em.gro",
+         "-c", em_input,
+         "-r", em_input,
          "-p", f"{job_name}_topol.top",
          "-o", f"{job_name}_nvt.tpr",
          "-maxwarn", "2"],
@@ -930,6 +956,11 @@ def _run_pipeline(inputs: dict) -> dict:
         _progress("\n[5/9] Energy minimization (steepest descent, up to 50k steps)…")
         _energy_minimization(work_dir, job_name, gmx)
         _progress("  ✓ EM converged")
+
+        # [5b/9] Make structure whole across PBC
+        _progress("  Making EM structure whole across periodic boundaries…")
+        _make_whole_after_em(work_dir, job_name, gmx)
+        _progress("  ✓ PBC whole done")
 
         # [6/9] NVT
         nvt_ns = 1.0

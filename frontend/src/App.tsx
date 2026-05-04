@@ -7,7 +7,7 @@ import { RunPanel } from "./runs/RunPanel";
 import { AnalysisPanel } from "./analysis/AnalysisPanel";
 import { Playground } from "./playground/Playground";
 import { ResultsPage } from "./results/ResultsPage";
-import { LibraryPage } from "./sequences/LibraryPage";
+import { DatasetPage } from "./datasets/DatasetPage";
 import { TerminalPage } from "./terminal/TerminalPage";
 import { submitRun } from "./api/runs";
 import { useCanvasStore } from "./canvas/store";
@@ -69,7 +69,7 @@ export default function App() {
   }
 
   if (page === "library") {
-    return <LibraryPage onBack={() => setPage("canvas")} />;
+    return <DatasetPage onBack={() => setPage("canvas")} />;
   }
 
   if (page === "terminal") {
