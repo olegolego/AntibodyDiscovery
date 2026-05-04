@@ -97,11 +97,13 @@ for binary in megadock decoygen; do
   fi
 done
 
-# ── 6. Create minimal .venv (Python subprocess_runner requires it) ─────────────
+# ── 6. Create .venv with matplotlib for docking visualization ─────────────────
 if [ ! -d ".venv/bin" ]; then
-  echo "Creating minimal Python venv..."
+  echo "Creating Python venv..."
   python3 -m venv .venv
 fi
+echo "Installing visualization deps (matplotlib, numpy)..."
+.venv/bin/pip install --quiet matplotlib numpy
 
 # ── 7. Verify ─────────────────────────────────────────────────────────────────
 echo ""

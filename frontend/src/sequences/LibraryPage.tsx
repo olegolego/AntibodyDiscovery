@@ -29,7 +29,11 @@ function ImportModal({ collId, onClose }: { collId: string; onClose: () => void 
 
   const { data: molecules } = useQuery<Molecule[]>({
     queryKey: ["molecules"],
-    queryFn: () => fetch("/api/results/molecules/").then((r) => r.json()),
+    queryFn: async () => {
+      const r = await fetch("/api/results/molecules/");
+      if (!r.ok) return [];
+      return r.json();
+    },
   });
 
   const importMut = useMutation({
@@ -374,7 +378,7 @@ export function LibraryPage({ onBack }: LibraryPageProps) {
         </button>
         <div className="w-px h-4 bg-border mx-1" />
         <BookOpen size={14} className="text-amber-400" />
-        <span className="text-sm font-bold text-white">Sequence Library</span>
+        <span className="text-sm font-bold text-white">Datasets</span>
         {collections.length > 0 && (
           <span className="text-xs text-slate-600">{collections.length} collection{collections.length !== 1 ? "s" : ""}</span>
         )}
@@ -399,7 +403,7 @@ export function LibraryPage({ onBack }: LibraryPageProps) {
             <div className="flex flex-col items-center justify-center h-full text-center gap-3">
               <BookOpen size={32} className="text-slate-700" />
               <p className="text-slate-500 text-sm font-medium">Select or create a collection</p>
-              <p className="text-slate-700 text-xs">Collections hold named VH/VL sequence pairs<br />you can reuse across pipelines.</p>
+              <p className="text-slate-700 text-xs">Collections hold named VH/VL sequence pairs<br />that you can reuse across pipelines.</p>
             </div>
           ) : (
             <EntryList collId={selectedId} />

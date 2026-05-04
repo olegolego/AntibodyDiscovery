@@ -73,6 +73,8 @@ function fallbackHandle(
   // This matters for the Compute node whose target handle is "in" but whose
   // first input port is "code" (a param, not a wirable input).
   if (handle === "in" || handle === "out") return handle;
+  // Dynamic per-pose handles (complex_1, complex_2, …) are always valid as-is.
+  if (handle && /^complex_\d+$/.test(handle)) return handle;
   const node = nodes.find((n) => n.id === nodeId);
   const data = node?.data as NodeData | undefined;
   const ports = kind === "source" ? data?.tool.outputs : data?.tool.inputs;

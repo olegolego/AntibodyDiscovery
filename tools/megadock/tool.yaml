@@ -40,13 +40,33 @@ inputs:
       54000 (6° steps, accurate, ~90 s). Use 3600 for screening.
 
 outputs:
-  - name: best_complex
+  - name: complex_1
     type: pdb
-    description: "Rank-1 docked complex (transformed ligand + receptor, combined PDB)."
+    description: "Rank-1 docked complex. Wire to GROMACS MD or other downstream tools."
+
+  - name: complex_2
+    type: pdb
+    description: "Rank-2 docked complex."
+
+  - name: complex_3
+    type: pdb
+    description: "Rank-3 docked complex."
+
+  - name: complex_4
+    type: pdb
+    description: "Rank-4 docked complex."
+
+  - name: complex_5
+    type: pdb
+    description: "Rank-5 docked complex."
+
+  - name: image
+    type: image
+    description: "2-D Cα scatter of the rank-1 docked complex (PNG, chain-colored)."
 
   - name: top_scores
     type: json
-    description: "Docking scores for the top N predictions: [{rank, score, complex_pdb}]."
+    description: "Docking scores: [{rank, score}]."
 
   - name: metadata
     type: json
@@ -55,4 +75,4 @@ outputs:
 runtime:
   kind: local_python
   gpu: false
-  timeout_seconds: 300
+  timeout_seconds: 600

@@ -220,7 +220,7 @@ async def collect(
             await _collect_sequence_input(run, node_id, inputs, outputs)
         elif tool_id in _STRUCTURE_TOOLS:
             await _collect_structure(run, node_id, tool_id, inputs, outputs, molecule_id)
-        elif tool_id in ("haddock3", "equidock"):
+        elif tool_id in ("haddock3", "equidock", "megadock"):
             await _collect_docking(run, node_id, tool_id, inputs, outputs, molecule_id)
         elif tool_id == "gromacs_mmpbsa":
             await _collect_gromacs_mmpbsa(run, node_id, tool_id, inputs, outputs, molecule_id)

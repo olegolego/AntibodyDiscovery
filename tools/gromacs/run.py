@@ -27,19 +27,29 @@ def _progress(msg: str) -> None:
 
 # ── GROMACS binary detection ───────────────────────────────────────────────────
 
-def _find_gmx() -> str:
-    """Return the gmx binary path, preferring the conda mmpbsa env."""
+_CONDA_MMPBSA = os.path.expanduser("~/miniforge3/envs/mmpbsa/bin")
+
+
+def _find_bin(name: str) -> str:
+    """Return the path of a binary, checking the conda mmpbsa env first."""
     candidates = [
-        "/mnt/ramdisk/miniconda3/envs/mmpbsa/bin.AVX2_256/gmx",
-        "/mnt/ramdisk/miniconda3/envs/mmpbsa/bin/gmx",
-        os.path.expanduser("~/miniconda3/envs/mmpbsa/bin/gmx"),
-        os.path.expanduser("~/anaconda3/envs/mmpbsa/bin/gmx"),
-        shutil.which("gmx") or "",
+        str(Path(_CONDA_MMPBSA) / name),
+        os.path.expanduser(f"~/miniforge3/envs/mmpbsa/bin/{name}"),
+        os.path.expanduser(f"~/mambaforge/envs/mmpbsa/bin/{name}"),
+        os.path.expanduser(f"~/miniconda3/envs/mmpbsa/bin/{name}"),
+        os.path.expanduser(f"~/anaconda3/envs/mmpbsa/bin/{name}"),
+        # AVX2 GROMACS build
+        os.path.expanduser(f"~/miniforge3/envs/mmpbsa/bin.AVX2_256/{name}"),
+        shutil.which(name) or "",
     ]
     for c in candidates:
         if c and Path(c).exists():
             return c
-    return "gmx"
+    return name
+
+
+def _find_gmx() -> str:
+    return _find_bin("gmx")
 
 
 def _n_threads() -> int:
@@ -55,12 +65,17 @@ def _run(
     check: bool = True,
     label: str = "",
 ) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    # Prepend conda mmpbsa bin so gmx_MMPBSA can find cpptraj and other deps
+    mmpbsa_bin = str(Path(_CONDA_MMPBSA))
+    env["PATH"] = mmpbsa_bin + os.pathsep + env.get("PATH", "")
     result = subprocess.run(
         [str(c) for c in cmd],
         cwd=str(cwd),
         input=stdin_text,
         text=True,
         capture_output=True,
+        env=env,
     )
     if check and result.returncode != 0:
         tag = label or " ".join(str(c) for c in cmd[:3])
@@ -232,6 +247,102 @@ def _regenerate_reference_pdb(
     )
     tmp_ndx.unlink(missing_ok=True)
     _progress(f"  Reference PDB regenerated: {len(combined)} Receptor+Ligand atoms")
+
+
+# ── Complex pre-processing ────────────────────────────────────────────────────
+
+def _prepare_complex_pdb(pdb_text: str) -> str:
+    """Strip MODEL/ENDMDL and translate chains to be within docking distance.
+
+    MEGADOCK outputs the docked ligand at an arbitrary grid position that can
+    be 20-40 nm from the receptor.  Writing that directly to GROMACS causes a
+    multi-GB solvation box and a fatal 'excluded atoms > cutoff' NVT error.
+
+    Fix:
+      1. Remove MODEL / ENDMDL markers that confuse pdb2gmx chain detection.
+      2. Parse Cα centroids per chain.
+      3. If any chain centroid is >5 nm from the receptor-chain centroid,
+         translate that chain to sit ~1 nm off the receptor surface.
+    """
+    import math
+
+    lines_out: list[str] = []
+    chain_ca: dict[str, list] = {}   # chain → list of (x,y,z,line_index)
+    atom_lines: list[str] = []
+
+    for line in pdb_text.splitlines():
+        if line.startswith(("MODEL", "ENDMDL")):
+            continue
+        if line.startswith(("ATOM", "HETATM")):
+            ch = line[21] if len(line) > 21 else " "
+            try:
+                x, y, z = float(line[30:38]), float(line[38:46]), float(line[46:54])
+            except ValueError:
+                atom_lines.append(line)
+                continue
+            if line[13:16].strip() == "CA":
+                chain_ca.setdefault(ch, []).append([x, y, z])
+            atom_lines.append(line)
+        else:
+            lines_out.append(line)   # TER, END, CONECT, etc.
+
+    if not atom_lines:
+        return pdb_text
+
+    def centroid(pts: list) -> list:
+        n = len(pts)
+        return [sum(p[i] for p in pts) / n for i in range(3)]
+
+    def dist(a: list, b: list) -> float:
+        return math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
+
+    # Identify "receptor" chains as the most populated chain(s)
+    sorted_chains = sorted(chain_ca.keys(), key=lambda c: -len(chain_ca[c]))
+    if not sorted_chains:
+        return "\n".join(atom_lines + lines_out) + "\n"
+
+    ref_chain = sorted_chains[0]
+    ref_cen   = centroid(chain_ca[ref_chain])
+
+    # Build per-chain translation vectors
+    translations: dict[str, list] = {}
+    for ch, pts in chain_ca.items():
+        if ch == ref_chain:
+            translations[ch] = [0.0, 0.0, 0.0]
+            continue
+        cen = centroid(pts)
+        d   = dist(cen, ref_cen)
+        # > 50 Å  = likely in wrong grid position — translate back
+        if d > 50.0:
+            _progress(
+                f"  ⚠ Chain {ch!r} centroid is {d:.1f} Å from receptor — "
+                "translating to docking contact distance"
+            )
+            # Move chain centroid to 15 Å from receptor centroid
+            scale = 15.0 / d if d > 0 else 1.0
+            translations[ch] = [
+                ref_cen[i] + (cen[i] - ref_cen[i]) * scale - cen[i]
+                for i in range(3)
+            ]
+        else:
+            translations[ch] = [0.0, 0.0, 0.0]
+
+    # Apply translations to atom lines
+    result: list[str] = []
+    for line in atom_lines:
+        ch = line[21] if len(line) > 21 else " "
+        tx = translations.get(ch, [0.0, 0.0, 0.0])
+        if any(abs(t) > 0.001 for t in tx):
+            try:
+                x = float(line[30:38]) + tx[0]
+                y = float(line[38:46]) + tx[1]
+                z = float(line[46:54]) + tx[2]
+                line = f"{line[:30]}{x:8.3f}{y:8.3f}{z:8.3f}{line[54:]}"
+            except ValueError:
+                pass
+        result.append(line)
+
+    return "\n".join(result + lines_out) + "\n"
 
 
 # ── MD pipeline steps ──────────────────────────────────────────────────────────
@@ -534,14 +645,16 @@ def _run_mmpbsa(
         if not p.exists():
             raise FileNotFoundError(f"Required file not found: {p}")
 
-    if not shutil.which("gmx_MMPBSA"):
+    mmpbsa_bin = _find_bin("gmx_MMPBSA")
+    if not Path(mmpbsa_bin).exists() and not shutil.which(mmpbsa_bin):
         raise RuntimeError(
-            "gmx_MMPBSA not found in PATH. "
+            "gmx_MMPBSA not found. "
             "Install via: conda install -c conda-forge gmx_MMPBSA ambertools"
         )
-    if not shutil.which("cpptraj"):
+    cpptraj_bin = _find_bin("cpptraj")
+    if not Path(cpptraj_bin).exists() and not shutil.which(cpptraj_bin):
         raise RuntimeError(
-            "cpptraj not found in PATH. "
+            "cpptraj not found. "
             "Install via: conda install -c conda-forge ambertools"
         )
 
@@ -603,10 +716,10 @@ def _run_mmpbsa(
     if mpiexec and n_cores > 1:
         cmd = [
             mpiexec, "-np", str(n_cores),
-            "gmx_MMPBSA", "MPI", "-O",
+            mmpbsa_bin, "MPI", "-O",
         ]
     else:
-        cmd = ["gmx_MMPBSA", "-O"]
+        cmd = [mmpbsa_bin, "-O"]
 
     cmd += [
         "-i", in_file.name,
@@ -779,9 +892,9 @@ def _run_pipeline(inputs: dict) -> dict:
     job_name = "run"
 
     try:
-        # Write input PDB
+        # Write input PDB (translate displaced chains back to receptor centroid)
         pdb_path = work_dir / "input_complex.pdb"
-        pdb_path.write_text(complex_pdb, encoding="utf-8")
+        pdb_path.write_text(_prepare_complex_pdb(complex_pdb), encoding="utf-8")
 
         # [1/9] Topology
         _progress("\n[1/9] Generating topology (pdb2gmx)…")

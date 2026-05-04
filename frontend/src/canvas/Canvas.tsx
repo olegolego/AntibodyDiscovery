@@ -118,6 +118,7 @@ export function Canvas({ onNodeClick }: CanvasProps) {
               sequence_design: "#22c55e",
               sequence_embedding: "#fb7185",
               docking: "#f97316",
+              molecular_dynamics: "#2dd4bf",
               toolbox: "#d946ef",
               debug: "#6b7280",
             };

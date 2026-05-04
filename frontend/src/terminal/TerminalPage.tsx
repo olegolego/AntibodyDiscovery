@@ -75,7 +75,7 @@ const STATIC_ENDPOINTS: { section: string; color: string; endpoints: ApiEndpoint
     ],
   },
   {
-    section: "Sequence Library",
+    section: "Sequence Datasets",
     color: "#fbbf24",
     endpoints: [
       { method: "GET",    path: "/api/sequences/collections/",                     description: "List all sequence collections" },

@@ -185,7 +185,7 @@ function SaveToLibraryModal({ mol, onClose }: { mol: MoleculeDetail; onClose: ()
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border">
           <div className="flex items-center gap-2">
             <BookOpen size={14} className="text-amber-400" />
-            <span className="text-sm font-bold text-white">Save to Library</span>
+            <span className="text-sm font-bold text-white">Save to Datasets</span>
           </div>
           <button onClick={onClose}
             className="text-slate-500 hover:text-white p-1 rounded hover:bg-white/5 transition-colors">
@@ -306,7 +306,7 @@ function MoleculeDetail({ id, onBack, onOpenRun }: { id: string; onBack: () => v
                 hover:bg-amber-500/10 transition-all"
             >
               <BookOpen size={11} />
-              Save to Library
+              Save to Datasets
             </button>
           )}
         </div>

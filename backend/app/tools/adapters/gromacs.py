@@ -15,7 +15,12 @@ class GROMACSAdapter:
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
         inputs = dict(inputs)
 
-        # Accept complex_pdb from common upstream port names
+        # Accept complex_pdb from common upstream port names (MEGADOCK, HADDOCK3, EquiDock)
+        if not inputs.get("complex_pdb"):
+            for k, v in inputs.items():
+                if k.startswith("complex_") and isinstance(v, str) and "ATOM" in v:
+                    inputs["complex_pdb"] = v
+                    break
         if not inputs.get("complex_pdb"):
             for k in ("best_complex", "structure", "pdb"):
                 v = inputs.get(k)

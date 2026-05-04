@@ -216,7 +216,7 @@ export function PipelineBar({
         <span>Terminal</span>
       </button>
 
-      {/* Library */}
+      {/* Datasets */}
       <button
         onClick={onOpenLibrary}
         className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
@@ -224,7 +224,7 @@ export function PipelineBar({
           hover:border-amber-500/40 hover:bg-amber-500/10 transition-all"
       >
         <BookOpen size={13} />
-        <span>Library</span>
+        <span>Datasets</span>
       </button>
 
       {/* Playground */}

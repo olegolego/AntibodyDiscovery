@@ -66,7 +66,7 @@ export function SequencePickerModal({ onSelect, onClose }: Props) {
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border shrink-0">
           <div className="flex items-center gap-2">
             <BookOpen size={14} className="text-amber-400" />
-            <span className="text-sm font-bold text-white">Pick from Sequence Library</span>
+            <span className="text-sm font-bold text-white">Pick from Datasets</span>
           </div>
           <button onClick={onClose}
             className="text-slate-500 hover:text-white transition-colors p-1 rounded hover:bg-white/5">
@@ -85,7 +85,7 @@ export function SequencePickerModal({ onSelect, onClose }: Props) {
                 <div className="px-3 py-4 text-xs text-slate-600 text-center leading-relaxed">
                   No collections yet.
                   <br />
-                  <span className="text-amber-500/70">Create one in the Library.</span>
+                  <span className="text-amber-500/70">Create one in Datasets.</span>
                 </div>
               )}
               {collections?.map((col: SequenceCollection) => (

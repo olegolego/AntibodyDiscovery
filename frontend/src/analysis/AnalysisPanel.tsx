@@ -95,7 +95,7 @@ function ModelContent({ data }: { data: NodeAnalysis }) {
               </div>
             )}
             {data.structure && (
-              <div className="border border-border rounded-xl overflow-hidden" style={{ height: 280 }}>
+              <div className="border border-border rounded-xl overflow-hidden" style={{ height: 420 }}>
                 <StructureViewer pdbText={data.structure} />
               </div>
             )}
@@ -103,7 +103,7 @@ function ModelContent({ data }: { data: NodeAnalysis }) {
         )}
 
         {tab === "structure" && (
-          <div className="border border-border rounded-xl overflow-hidden" style={{ height: 500 }}>
+          <div className="border border-border rounded-xl overflow-hidden" style={{ height: 640 }}>
             {data.structure ? (
               <StructureViewer pdbText={data.structure} />
             ) : (
@@ -220,7 +220,7 @@ function ImmuneBuilderGrid({ models }: { models: Array<{ index: number; data: No
         {models.map((m) => (
           <div key={m.index} className="flex flex-col gap-2">
             <span className="text-xs font-semibold text-violet-300">Model {m.index + 1}</span>
-            <div className="border border-border rounded-xl overflow-hidden" style={{ height: 220 }}>
+            <div className="border border-border rounded-xl overflow-hidden" style={{ height: 300 }}>
               {m.data?.structure
                 ? <StructureViewer pdbText={m.data.structure} />
                 : <div className="flex items-center justify-center h-full text-slate-500 text-xs">No structure</div>
@@ -303,7 +303,7 @@ function HADDOCK3View({ data }: { data: NodeAnalysis }) {
         <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
           Best Complex
         </span>
-        <div className="border border-border rounded-xl overflow-hidden" style={{ height: 480 }}>
+        <div className="border border-border rounded-xl overflow-hidden" style={{ height: 600 }}>
           {data.structure
             ? <StructureViewer pdbText={data.structure} />
             : <div className="flex items-center justify-center h-full text-slate-500 text-sm">No structure</div>
@@ -405,7 +405,7 @@ function EquiDockView({ data }: { data: NodeAnalysis }) {
           </button>
         )}
       </div>
-      <div className="border border-border rounded-xl overflow-hidden" style={{ height: 500 }}>
+      <div className="border border-border rounded-xl overflow-hidden" style={{ height: 600 }}>
         {data.structure ? (
           <StructureViewer pdbText={data.structure} />
         ) : (
@@ -474,7 +474,7 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
       <div
-        className="w-full max-w-5xl max-h-[90vh] flex flex-col rounded-2xl overflow-hidden border border-border shadow-2xl"
+        className="w-full max-w-5xl max-h-[94vh] flex flex-col rounded-2xl overflow-hidden border border-border shadow-2xl"
         style={{ background: "#0e1425" }}
       >
         <div

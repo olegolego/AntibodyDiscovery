@@ -168,7 +168,7 @@ export function SequenceInputNode({ id, data, selected }: NodeProps<NodeData>) {
   );
 }
 
-// ── Sequence DB node — picks from library ───────────────────────────────────
+// ── Sequence DB node — picks from datasets ──────────────────────────────────
 
 export function SequenceDbNode({ id, data, selected }: NodeProps<NodeData>) {
   const runStatus = useCanvasStore((s) => s.runNodeStatuses[id]);
@@ -203,8 +203,8 @@ export function SequenceDbNode({ id, data, selected }: NodeProps<NodeData>) {
         {/* Header */}
         <div className="flex items-center justify-between mb-2.5">
           <div>
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-300">Input · Library</div>
-            <div className="text-sm font-bold text-white">Sequence Library</div>
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-amber-300">Input · Datasets</div>
+            <div className="text-sm font-bold text-white">Sequence Dataset</div>
           </div>
           {runStatus && STATUS_DOT[runStatus] && (
             <span className={`w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
@@ -243,7 +243,7 @@ export function SequenceDbNode({ id, data, selected }: NodeProps<NodeData>) {
             hover:bg-amber-500/10 hover:border-amber-400/60 transition-colors"
         >
           <BookOpen size={11} />
-          Pick from Library
+          Pick from Datasets
         </button>
 
         <Handle
@@ -350,9 +350,10 @@ export function MegaDockNode({ id, data, selected }: NodeProps<NodeData>) {
   const handles = Array.from({ length: numPred }, (_, i) => ({
     id:    `complex_${i + 1}`,
     label: String(i + 1),
-    top:   `${((i + 0.5) / numPred) * 100}%`,
+    top:   `${10 + ((i + 0.5) / numPred) * 80}%`,
   }));
-  const minH = Math.max(130, numPred * 26 + 40);
+  const minH = Math.max(120, numPred * 26 + 48);
+  const image = nodeOutputs?.["image"] as string | undefined;
 
   return (
     <div
@@ -397,14 +398,24 @@ export function MegaDockNode({ id, data, selected }: NodeProps<NodeData>) {
             Docking
           </div>
           <div className="text-sm font-bold text-white leading-tight">MEGADOCK</div>
-          <div className="text-[10px] text-slate-500 mt-0.5">{numPred} poses</div>
+          <div className="text-[10px] text-slate-500 mt-0.5">{numPred} poses · wire any to MD</div>
         </div>
         {runStatus && STATUS_DOT[runStatus] && (
           <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
         )}
       </div>
 
-      {/* Rank labels — inside right edge */}
+      {/* Docking image thumbnail */}
+      {image && (
+        <img
+          src={image}
+          alt="docking"
+          className="nodrag w-full rounded-md mt-2 opacity-90 border border-border"
+          style={{ imageRendering: "auto" }}
+        />
+      )}
+
+      {/* Output labels — inside right edge */}
       <div className="absolute right-5 top-0 bottom-0 pointer-events-none">
         {handles.map((h) => (
           <span
@@ -427,7 +438,7 @@ export function MegaDockNode({ id, data, selected }: NodeProps<NodeData>) {
             position={Position.Right}
             id={h.id}
             style={{ top: h.top, background: ready ? "#34d399" : "#818cf8" }}
-            title={`Pose ${h.label}${ready ? " — ready" : ""}`}
+            title={`Pose ${h.label} — wire to GROMACS MD${ready ? " — ready" : ""}`}
             className="!w-3 !h-3 !border-2 !border-surface"
           />
         );

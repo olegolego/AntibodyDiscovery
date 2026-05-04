@@ -37,7 +37,10 @@ const CustomDot = (props: { cx?: number; cy?: number; payload?: { plddt: number 
 };
 
 export function PLDDTChart({ plddt }: Props) {
-  const data = downsample(plddt.residue_numbers, plddt.plddt_per_residue);
+  const residues = Array.isArray(plddt?.residue_numbers) ? plddt.residue_numbers : [];
+  const scores   = Array.isArray(plddt?.plddt_per_residue) ? plddt.plddt_per_residue : [];
+  const data = downsample(residues, scores);
+  if (data.length === 0) return null;
 
   return (
     <ResponsiveContainer width="100%" height={200}>
