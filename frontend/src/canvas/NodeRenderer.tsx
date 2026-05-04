@@ -353,7 +353,6 @@ export function MegaDockNode({ id, data, selected }: NodeProps<NodeData>) {
     top:   `${10 + ((i + 0.5) / numPred) * 80}%`,
   }));
   const minH = Math.max(120, numPred * 26 + 48);
-  const image = nodeOutputs?.["image"] as string | undefined;
 
   return (
     <div
@@ -404,16 +403,6 @@ export function MegaDockNode({ id, data, selected }: NodeProps<NodeData>) {
           <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
         )}
       </div>
-
-      {/* Docking image thumbnail */}
-      {image && (
-        <img
-          src={image}
-          alt="docking"
-          className="nodrag w-full rounded-md mt-2 opacity-90 border border-border"
-          style={{ imageRendering: "auto" }}
-        />
-      )}
 
       {/* Output labels — inside right edge */}
       <div className="absolute right-5 top-0 bottom-0 pointer-events-none">

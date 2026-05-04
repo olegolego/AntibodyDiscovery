@@ -38,60 +38,58 @@ function baseParams(color: ColorScheme, rep: RepType): Record<string, unknown> {
 }
 
 export function StructureViewer({ pdbText }: Props) {
+  // NGL mounts its canvas directly inside this div
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef     = useRef<any>(null);
   const compRef      = useRef<any>(null);
-  // Active representation object — we mutate its params instead of remove+add
   const repObjRef    = useRef<any>(null);
 
-  const [color,   setColor]   = useState<ColorScheme>("chainname");
-  const [rep,     setRep]     = useState<RepType>("cartoon");
-  const [spin,    setSpin]    = useState(false);
-  const [loaded,  setLoaded]  = useState(false);
+  const [color,  setColor]  = useState<ColorScheme>("chainname");
+  const [rep,    setRep]    = useState<RepType>("cartoon");
+  const [spin,   setSpin]   = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
-  // Keep refs in sync so async callbacks see the latest values
   const colorRef = useRef(color);
   const repRef   = useRef(rep);
   useEffect(() => { colorRef.current = color; }, [color]);
   useEffect(() => { repRef.current = rep; },   [rep]);
 
-  // ── Create stage once on mount, dispose on unmount ───────────────────────────
+  // ── Create stage once, dispose on unmount ────────────────────────────────────
   useEffect(() => {
-    if (!containerRef.current) return;
     const container = containerRef.current;
+    if (!container) return;
+
     import("ngl").then((NGL) => {
-      if (!container) return;
+      if (!containerRef.current) return; // unmounted while importing
       const stage = new NGL.Stage(container, {
         backgroundColor: "#080d1c",
         quality: "high",
         impostor: true,
         cameraFov: 40,
         lightColor: 0xffffff,
-        lightIntensity: 1.15,
+        lightIntensity: 1.2,
         ambientColor: 0x445566,
-        ambientIntensity: 0.65,
+        ambientIntensity: 0.7,
       });
       stageRef.current = stage;
 
-      const onResize = () => stage.handleResize();
-      window.addEventListener("resize", onResize);
-
-      // ResizeObserver ensures NGL canvas matches the container once CSS layout settles
-      const ro = new ResizeObserver(() => stage.handleResize());
+      // Keep canvas in sync with container size
+      const ro = new ResizeObserver(() => {
+        if (stageRef.current) stageRef.current.handleResize();
+      });
       ro.observe(container);
+      const onWindowResize = () => { if (stageRef.current) stageRef.current.handleResize(); };
+      window.addEventListener("resize", onWindowResize);
 
-      // Load the pdbText that was already set when NGL arrived
       if (pdbText) _load(stage, pdbText);
 
-      // Store cleanup on the stage object so the return below can reach it
       (stage as any).__cleanup = () => {
-        window.removeEventListener("resize", onResize);
         ro.disconnect();
+        window.removeEventListener("resize", onWindowResize);
       };
     });
 
     return () => {
-      // Dispose only on unmount — not between pdbText changes
       if (stageRef.current) {
         (stageRef.current as any).__cleanup?.();
         stageRef.current.dispose();
@@ -101,26 +99,23 @@ export function StructureViewer({ pdbText }: Props) {
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // intentionally empty — mount/unmount only
+  }, []);
 
   // ── Reload when pdbText changes ───────────────────────────────────────────────
   useEffect(() => {
-    if (!pdbText) return;
-    if (stageRef.current) {
-      _load(stageRef.current, pdbText);
-    }
-    // If the stage isn't ready yet, the mount effect will call _load once NGL resolves.
+    if (!pdbText || !stageRef.current) return;
+    _load(stageRef.current, pdbText);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdbText]);
 
-  // ── Update color without removing the representation ─────────────────────────
+  // ── Color — in-place parameter update (no remove+add) ────────────────────────
   useEffect(() => {
     if (!repObjRef.current || !loaded) return;
     repObjRef.current.setParameters(baseParams(colorRef.current, repRef.current));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [color, loaded]);
 
-  // ── Swap representation type (needs remove+add, but only after full load) ────
+  // ── Rep type — requires remove+add ───────────────────────────────────────────
   useEffect(() => {
     const comp = compRef.current;
     if (!comp || !loaded) return;
@@ -136,14 +131,12 @@ export function StructureViewer({ pdbText }: Props) {
     try {
       if (spin) stage.setSpin([0, 1, 0], 0.008);
       else       stage.setSpin(null);
-    } catch { /* setSpin not available in this NGL build */ }
+    } catch { /* no-op */ }
   }, [spin, loaded]);
-
-  // ─────────────────────────────────────────────────────────────────────────────
 
   function _load(stage: any, text: string) {
     setLoaded(false);
-    compRef.current  = null;
+    compRef.current   = null;
     repObjRef.current = null;
     stage.removeAllComponents();
 
@@ -153,30 +146,30 @@ export function StructureViewer({ pdbText }: Props) {
       .then((component: any) => {
         if (!component || stage !== stageRef.current) return;
         compRef.current = component;
-        const repObj = component.addRepresentation(
+        repObjRef.current = component.addRepresentation(
           repRef.current,
           baseParams(colorRef.current, repRef.current),
         );
-        repObjRef.current = repObj;
         component.autoView();
         setLoaded(true);
       })
-      .catch(() => {/* ignore NGL internal errors during load cancellation */});
+      .catch(() => {});
   }
 
   return (
-    <div className="relative w-full h-full" style={{ minHeight: 280 }}>
-      {/* NGL canvas fills entire container */}
-      <div ref={containerRef} className="absolute inset-0 rounded-xl overflow-hidden" />
-
-      {/* Floating toolbar */}
+    // containerRef IS the NGL host — NGL appends its <canvas> directly here
+    <div
+      ref={containerRef}
+      className="relative w-full h-full rounded-xl overflow-hidden"
+      style={{ minHeight: 280 }}
+    >
+      {/* Floating toolbar — z-10 so it sits above NGL canvas */}
       {loaded && (
         <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10
           flex items-center gap-1 flex-wrap justify-center
           bg-black/70 backdrop-blur-md border border-white/10
           rounded-2xl px-3 py-2 shadow-xl max-w-[calc(100%-16px)]"
         >
-          {/* Color buttons */}
           <span className="text-[9px] font-bold uppercase tracking-wider text-slate-600">Color</span>
           {COLOR_OPTIONS.map((o) => (
             <button
@@ -194,7 +187,6 @@ export function StructureViewer({ pdbText }: Props) {
 
           <div className="w-px h-4 bg-white/10 mx-0.5" />
 
-          {/* Representation buttons */}
           <span className="text-[9px] font-bold uppercase tracking-wider text-slate-600">View</span>
           {REP_OPTIONS.map((o) => (
             <button
@@ -212,7 +204,6 @@ export function StructureViewer({ pdbText }: Props) {
 
           <div className="w-px h-4 bg-white/10 mx-0.5" />
 
-          {/* Spin */}
           <button
             onClick={() => setSpin((v) => !v)}
             title={spin ? "Stop rotation" : "Auto-rotate"}
@@ -225,7 +216,6 @@ export function StructureViewer({ pdbText }: Props) {
             {spin ? <Pause size={11} /> : <Play size={11} />}
           </button>
 
-          {/* Re-center */}
           <button
             onClick={() => compRef.current?.autoView(400)}
             title="Reset view"
@@ -237,9 +227,9 @@ export function StructureViewer({ pdbText }: Props) {
         </div>
       )}
 
-      {/* Loading indicator */}
+      {/* Loading spinner */}
       {!loaded && pdbText && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
           <div className="flex flex-col items-center gap-2">
             <div className="w-5 h-5 rounded-full border-2 border-indigo-500/30 border-t-indigo-400 animate-spin" />
             <span className="text-[11px] text-slate-600">Loading structure…</span>
