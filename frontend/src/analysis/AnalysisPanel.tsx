@@ -216,32 +216,37 @@ function ImmuneBuilderGrid({ models }: { models: Array<{ index: number; data: No
 
   return (
     <div className="pt-4 flex flex-col gap-4">
+      {/* 2-column structure grid — model label is an overlay inside the viewer */}
       <div className="grid grid-cols-2 gap-4">
         {models.map((m) => (
-          <div key={m.index} className="flex flex-col gap-2">
-            <span className="text-xs font-semibold text-violet-300">Model {m.index + 1}</span>
-            <div className="border border-border rounded-xl overflow-hidden" style={{ height: 300 }}>
-              {m.data?.structure
-                ? <StructureViewer pdbText={m.data.structure} />
-                : <div className="flex items-center justify-center h-full text-slate-500 text-xs">No structure</div>
-              }
+          <div key={m.index} className="relative border border-border rounded-xl overflow-hidden" style={{ height: 420 }}>
+            {m.data?.structure
+              ? <StructureViewer pdbText={m.data.structure} />
+              : <div className="flex items-center justify-center h-full text-slate-500 text-xs">No structure</div>
+            }
+            {/* Model badge — top-left overlay, doesn't interfere with the toolbar */}
+            <div className="absolute top-2 left-2 z-20 px-2 py-0.5 rounded-md
+              bg-black/60 backdrop-blur-sm border border-violet-500/30
+              text-[10px] font-semibold text-violet-300 pointer-events-none">
+              Model {m.index + 1}
             </div>
-            {rmsd.length > 0 && (
-              <div className="border border-border rounded-xl p-3">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">
-                  Per-Residue Confidence
-                </div>
-                <IbConfidenceChart rmsd={rmsd} />
-                <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-600 px-1">
-                  <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-sky-400 inline-block" />≥ 85 very high</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-emerald-400 inline-block" />≥ 60 confident</span>
-                  <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-red-400 inline-block" />&lt; 40 uncertain</span>
-                </div>
-              </div>
-            )}
           </div>
         ))}
       </div>
+      {/* Confidence chart shown once below the grid */}
+      {rmsd.length > 0 && (
+        <div className="border border-border rounded-xl p-3">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">
+            Per-Residue Confidence (all models)
+          </div>
+          <IbConfidenceChart rmsd={rmsd} />
+          <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-600 px-1">
+            <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-sky-400 inline-block" />≥ 85 very high</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-emerald-400 inline-block" />≥ 60 confident</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-red-400 inline-block" />&lt; 40 uncertain</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

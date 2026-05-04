@@ -252,29 +252,43 @@ def _regenerate_reference_pdb(
 # ── Complex pre-processing ────────────────────────────────────────────────────
 
 def _prepare_complex_pdb(pdb_text: str) -> str:
-    """Strip MODEL/ENDMDL and translate chains displaced by MEGADOCK grid positioning.
+    """Strip HETATM/MODEL, translate displaced chains, and emit TER between chains.
 
     MEGADOCK places the docked structure at an arbitrary FFT grid offset — often
     20-40 nm from the receptor — causing a multi-GB solvation box and a fatal
-    'excluded atoms > cutoff' NVT error.
+    'excluded atoms > cutoff' NVT error.  Three problems to fix:
 
-    Two-pass approach:
-      Pass 1: collect Cα centroids per chain, build per-chain translation vectors.
-      Pass 2: re-stream the ORIGINAL lines in order (preserving TER/END between
-              chains so pdb2gmx never sees a phantom cross-chain peptide bond),
-              applying coordinate translations in-place.
+    1. MEGADOCK does NOT write TER records.  Without them pdb2gmx fuses all
+       chains into one molecule and builds phantom cross-chain peptide bonds
+       spanning hundreds of Angstroms → 'excluded atoms > cutoff'.
+       Fix: always emit a TER after each chain in the output.
+
+    2. HETATM records (crystallographic waters, ions) stay at their original
+       far-away coordinates when the protein chains are translated → editconf
+       builds a 500 Å simulation box.
+       Fix: strip all HETATM lines; pdb2gmx does not need them.
+
+    3. Chain centroids can be 20-40 nm apart.
+       Fix: translate each outlier chain to sit 15 Å from the reference centroid.
     """
     import math
 
-    # ── Pass 1: centroids ────────────────────────────────────────────────────────
-    chain_ca: dict[str, list] = {}
-    has_atoms = False
+    # ── Pass 1: collect ATOM lines per chain + Cα centroids ──────────────────────
+    chain_order: list[str] = []          # chains in appearance order
+    chain_atoms: dict[str, list] = {}    # ch → list of ATOM lines
+    chain_ca:    dict[str, list] = {}    # ch → list of [x,y,z] for CA atoms
 
     for line in pdb_text.splitlines():
-        if not line.startswith(("ATOM", "HETATM")):
+        if line.startswith(("MODEL", "ENDMDL", "TER", "END", "CONECT", "REMARK",
+                             "HETATM", "ANISOU")):
+            continue  # strip everything except ATOM records
+        if not line.startswith("ATOM"):
             continue
-        has_atoms = True
         ch = line[21] if len(line) > 21 else " "
+        if ch not in chain_atoms:
+            chain_order.append(ch)
+            chain_atoms[ch] = []
+        chain_atoms[ch].append(line)
         if line[13:16].strip() == "CA":
             try:
                 x, y, z = float(line[30:38]), float(line[38:46]), float(line[46:54])
@@ -282,7 +296,7 @@ def _prepare_complex_pdb(pdb_text: str) -> str:
             except ValueError:
                 pass
 
-    if not has_atoms or not chain_ca:
+    if not chain_order:
         return pdb_text
 
     def centroid(pts: list) -> list:
@@ -292,15 +306,19 @@ def _prepare_complex_pdb(pdb_text: str) -> str:
     def dist(a: list, b: list) -> float:
         return math.sqrt(sum((a[i] - b[i]) ** 2 for i in range(3)))
 
-    # Reference = chain with the most Cα atoms (usually the target protein)
-    ref_chain = max(chain_ca, key=lambda c: len(chain_ca[c]))
-    ref_cen   = centroid(chain_ca[ref_chain])
+    # Reference = chain with the most Cα atoms
+    ref_chain = max(chain_ca, key=lambda c: len(chain_ca[c])) if chain_ca else chain_order[0]
+    ref_cen   = centroid(chain_ca[ref_chain]) if ref_chain in chain_ca else [0.0, 0.0, 0.0]
 
     translations: dict[str, list] = {}
-    for ch, pts in chain_ca.items():
+    for ch in chain_order:
+        pts = chain_ca.get(ch, [])
+        if not pts:
+            translations[ch] = [0.0, 0.0, 0.0]
+            continue
         cen = centroid(pts)
         d   = dist(cen, ref_cen)
-        if d > 50.0:  # > 50 Å → MEGADOCK grid displacement
+        if d > 50.0:
             _progress(
                 f"  ⚠ Chain {ch!r} centroid is {d:.1f} Å from receptor — "
                 "translating to docking contact distance"
@@ -313,17 +331,14 @@ def _prepare_complex_pdb(pdb_text: str) -> str:
         else:
             translations[ch] = [0.0, 0.0, 0.0]
 
-    # ── Pass 2: stream original lines in order, apply translations in-place ─────
-    # Keeping TER/END/CONECT records at their original positions is critical —
-    # moving them to the end would fuse separate chains into one polypeptide in
-    # pdb2gmx, creating phantom cross-chain bonds spanning hundreds of Angstroms.
+    # ── Pass 2: build output chain-by-chain with explicit TER after each ─────────
+    # Generating TER records (not just preserving them) is essential — MEGADOCK
+    # does not write TER, so without this pdb2gmx merges all chains into one
+    # molecule and invents phantom cross-chain peptide bonds.
     result: list[str] = []
-    for line in pdb_text.splitlines():
-        if line.startswith(("MODEL", "ENDMDL")):
-            continue  # strip multi-model markers
-        if line.startswith(("ATOM", "HETATM")):
-            ch = line[21] if len(line) > 21 else " "
-            tx = translations.get(ch, [0.0, 0.0, 0.0])
+    for ch in chain_order:
+        tx = translations[ch]
+        for line in chain_atoms[ch]:
             if any(abs(t) > 0.001 for t in tx):
                 try:
                     x = float(line[30:38]) + tx[0]
@@ -332,8 +347,10 @@ def _prepare_complex_pdb(pdb_text: str) -> str:
                     line = f"{line[:30]}{x:8.3f}{y:8.3f}{z:8.3f}{line[54:]}"
                 except ValueError:
                     pass
-        result.append(line)
+            result.append(line)
+        result.append("TER")  # always emit TER — pdb2gmx uses this to split chains
 
+    result.append("END")
     return "\n".join(result) + "\n"
 
 
@@ -352,6 +369,7 @@ def _generate_topology(
          "-ff", forcefield,
          "-water", water_model,
          "-merge", "no",
+         "-chainsep", "id_or_ter",
          "-ignh"],
         cwd=work_dir,
         label="pdb2gmx",
