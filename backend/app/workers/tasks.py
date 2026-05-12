@@ -19,6 +19,7 @@ _ADAPTER_MAP = {
     "biophi":            ("app.tools.adapters.biophi",    "BioPhiAdapter"),
     "ablang":            ("app.tools.adapters.ablang",    "AbLangAdapter"),
     "equidock":          ("app.tools.adapters.equidock",  "EquiDockAdapter"),
+    "equifold":          ("app.tools.adapters.equifold",  "EquiFoldAdapter"),
     "megadock":          ("app.tools.adapters.megadock",  "MEGADOCKAdapter"),
     "gromacs_mmpbsa":    ("app.tools.adapters.gromacs",   "GROMACSAdapter"),
     "pdbfixer":          ("app.tools.adapters.pdbfixer",  "PDBFixerAdapter"),

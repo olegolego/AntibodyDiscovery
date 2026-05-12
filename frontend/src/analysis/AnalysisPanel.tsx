@@ -423,6 +423,369 @@ function EquiDockView({ data }: { data: NodeAnalysis }) {
   );
 }
 
+// ── MegaDock: score bars + complex viewer ────────────────────────────────────
+
+function MegaDockView({ data }: { data: NodeAnalysis }) {
+  const scores   = (data.top_scores ?? []) as import("@/api/analysis").MegadockScore[];
+  const pdbs     = (data.complex_pdbs ?? {}) as Record<string, string>;
+  const meta     = data.docking_metadata as import("@/api/analysis").MegadockMetadata | null;
+  const [selected, setSelected] = useState<number>(scores[0]?.rank ?? 1);
+
+  const pdbText = pdbs[String(selected)] ?? data.structure ?? null;
+  const maxScore = scores[0]?.score ?? 1;
+
+  function downloadPdb() {
+    if (!pdbText) return;
+    const blob = new Blob([pdbText], { type: "text/plain" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url;
+    a.download = `megadock_rank${selected}.pdb`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="pt-4 flex flex-col gap-5">
+      {/* Stats row */}
+      {meta && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <StatCard
+            label="Best Score"
+            value={meta.best_score?.toFixed(1) ?? "—"}
+            sub="MEGADOCK convolution score"
+          />
+          <StatCard
+            label="Poses"
+            value={String(scores.length)}
+            sub="top-ranked"
+          />
+          <StatCard
+            label="Rotations"
+            value={meta.rotational_sampling?.toLocaleString() ?? "—"}
+            sub="sampled"
+          />
+          <StatCard
+            label="Time"
+            value={meta.elapsed_seconds != null ? `${meta.elapsed_seconds.toFixed(1)} s` : "—"}
+            sub="wall time"
+          />
+        </div>
+      )}
+
+      {/* Score bars */}
+      {scores.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
+            Docking Scores — click to view
+          </span>
+          <div className="flex flex-col gap-1.5">
+            {scores.map(({ rank, score }) => {
+              const pct   = (score / maxScore) * 100;
+              const isTop = rank === 1;
+              const isSel = rank === selected;
+              return (
+                <button
+                  key={rank}
+                  onClick={() => setSelected(rank)}
+                  className={`flex items-center gap-3 px-3 py-2 rounded-xl border transition-all text-left
+                    ${isSel
+                      ? "border-indigo-500/60 bg-indigo-500/10"
+                      : "border-border hover:border-slate-500 hover:bg-white/[0.03]"
+                    }`}
+                >
+                  <span className={`w-14 text-xs font-mono shrink-0 ${isTop ? "text-emerald-400" : "text-slate-500"}`}>
+                    #{rank}
+                  </span>
+                  <div className="flex-1 h-2 bg-canvas rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{
+                        width: `${pct}%`,
+                        background: isTop
+                          ? "linear-gradient(90deg,#34d399,#6ee7b7)"
+                          : isSel
+                          ? "linear-gradient(90deg,#818cf8,#a78bfa)"
+                          : "linear-gradient(90deg,#475569,#64748b)",
+                      }}
+                    />
+                  </div>
+                  <span className={`w-20 text-xs font-mono text-right shrink-0 ${isTop ? "text-emerald-300" : "text-slate-400"}`}>
+                    {score.toFixed(2)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 3-D viewer */}
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
+          Rank #{selected} Complex
+        </span>
+        {pdbText && (
+          <button
+            onClick={downloadPdb}
+            className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors font-medium
+              px-3 py-1 rounded-lg border border-indigo-500/30 hover:border-indigo-400/50
+              hover:bg-indigo-500/10"
+          >
+            Download PDB
+          </button>
+        )}
+      </div>
+      <div className="border border-border rounded-xl overflow-hidden" style={{ height: 560 }}>
+        {pdbText ? (
+          <StructureViewer key={selected} pdbText={pdbText} />
+        ) : (
+          <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+            No complex structure available
+          </div>
+        )}
+      </div>
+
+      {/* Optional: rendered image from MEGADOCK */}
+      {data.image && (
+        <div className="flex flex-col gap-2">
+          <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
+            Docking Preview Image
+          </span>
+          <img
+            src={data.image}
+            alt="MEGADOCK docking preview"
+            className="rounded-xl border border-border w-full"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── SuperWater: hydrated structure + water count ─────────────────────────────
+
+function SuperWaterView({ data }: { data: NodeAnalysis }) {
+  const waterCount = data.water_count as unknown as { waters_placed?: number } | null;
+
+  function downloadPdb() {
+    if (!data.structure) return;
+    const blob = new Blob([data.structure], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "hydrated_structure.pdb";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  return (
+    <div className="pt-4 flex flex-col gap-5">
+      <div className="grid grid-cols-2 gap-3">
+        <StatCard
+          label="Waters Placed"
+          value={waterCount?.waters_placed != null ? String(waterCount.waters_placed) : "—"}
+          sub="predicted binding-site waters"
+        />
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
+          Hydrated Structure
+        </span>
+        {data.structure && (
+          <button
+            onClick={downloadPdb}
+            className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors font-medium px-3 py-1 rounded-lg border border-cyan-500/30 hover:border-cyan-400/50 hover:bg-cyan-500/10"
+          >
+            Download PDB
+          </button>
+        )}
+      </div>
+      <div className="border border-border rounded-xl overflow-hidden" style={{ height: 600 }}>
+        {data.structure ? (
+          <StructureViewer pdbText={data.structure} />
+        ) : (
+          <div className="flex items-center justify-center h-full text-slate-500 text-sm">
+            No hydrated structure available
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── GROMACS MM/GBSA: ΔG bind + energy decomposition ─────────────────────────
+
+function GROMACSView({ data }: { data: NodeAnalysis }) {
+  const dg = data.delta_g_bind;
+  const decomp = data.energy_decomposition as Record<string, number> | null;
+  const conv = data.md_convergence as Record<string, number | string> | null;
+
+  const conf =
+    dg == null ? "—" :
+    dg <= -10 ? "Strong" :
+    dg <= -5  ? "Moderate" :
+    "Weak";
+  const confColor =
+    dg == null ? "text-slate-500" :
+    dg <= -10  ? "text-emerald-400" :
+    dg <= -5   ? "text-amber-400" :
+    "text-red-400";
+
+  const DECOMP_LABELS: Record<string, string> = {
+    "VDWAALS":       "Van der Waals",
+    "EEL":           "Electrostatics",
+    "EGB":           "Polar solvation (GB)",
+    "ESURF":         "Non-polar solvation",
+    "DELTA VDWAALS": "ΔVdW",
+    "DELTA EEL":     "ΔElectrostatics",
+    "DELTA EGB":     "ΔPolar solvation",
+    "DELTA ESURF":   "ΔNon-polar solvation",
+    "DELTA TOTAL":   "ΔG total",
+  };
+
+  return (
+    <div className="pt-4 flex flex-col gap-5">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <StatCard
+          label="ΔG bind"
+          value={dg != null ? `${dg.toFixed(2)} kcal/mol` : "—"}
+          sub="MM/GBSA binding free energy"
+        />
+        <StatCard label="Binding strength" value={conf} />
+        {conv && (
+          <StatCard
+            label="MD Convergence"
+            value={conv["status"] != null ? String(conv["status"]) : "—"}
+            sub="RMSD-based assessment"
+          />
+        )}
+      </div>
+
+      {decomp && Object.keys(decomp).length > 0 && (
+        <div className="border border-border rounded-xl overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-border bg-surface2">
+            <span className="text-[11px] font-bold uppercase tracking-widest text-slate-500">
+              Energy Decomposition
+            </span>
+          </div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border">
+                <th className="text-left px-4 py-2 text-slate-500 font-semibold">Component</th>
+                <th className="text-right px-4 py-2 text-slate-500 font-semibold">kcal/mol</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(decomp).map(([key, val]) => (
+                <tr key={key} className="border-b border-border/50 hover:bg-white/[0.02]">
+                  <td className="px-4 py-2 text-slate-300">
+                    {DECOMP_LABELS[key] ?? key}
+                  </td>
+                  <td className={`px-4 py-2 text-right font-mono ${
+                    key.startsWith("DELTA") ? "font-bold text-white" : "text-slate-400"
+                  }`}>
+                    {typeof val === "number" ? val.toFixed(2) : String(val)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className={`text-xs text-center py-2 font-medium ${confColor}`}>
+        {dg != null
+          ? `ΔG = ${dg.toFixed(2)} kcal/mol — ${conf} binding affinity`
+          : "No binding free energy data"}
+      </div>
+    </div>
+  );
+}
+
+// ── Generic output viewer (AbLang, AbMAP, ProteinMPNN, compute, etc.) ────────
+
+function _renderValue(v: unknown): React.ReactNode {
+  if (v === null || v === undefined) return <span className="text-slate-600">—</span>;
+  if (typeof v === "boolean") return <span className={v ? "text-emerald-400" : "text-red-400"}>{String(v)}</span>;
+  if (typeof v === "number") return <span className="font-mono text-sky-300">{v}</span>;
+  if (typeof v === "string") {
+    if (v.length === 0) return <span className="text-slate-600">—</span>;
+    if (v.length <= 80) return <span className="font-mono text-slate-300 break-all">{v}</span>;
+    return (
+      <pre className="text-xs font-mono text-slate-300 bg-canvas border border-border rounded-lg p-3 whitespace-pre-wrap break-all max-h-48 overflow-y-auto">
+        {v}
+      </pre>
+    );
+  }
+  if (Array.isArray(v)) {
+    if (v.length === 0) return <span className="text-slate-600">[] (empty)</span>;
+    // List of strings → numbered sequence list
+    if (typeof v[0] === "string") {
+      return (
+        <div className="flex flex-col gap-1.5">
+          {v.map((s, i) => (
+            <div key={i} className="flex items-start gap-2">
+              <span className="text-[10px] font-mono text-indigo-400 shrink-0 mt-0.5 w-6 text-right">{i + 1}</span>
+              <span className="font-mono text-xs text-slate-300 break-all">{String(s)}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    // List of numbers → summarise
+    if (typeof v[0] === "number") {
+      const nums = v as number[];
+      const mean = nums.reduce((a, b) => a + b, 0) / nums.length;
+      return (
+        <span className="font-mono text-xs text-slate-400">
+          [{nums.length} values · min {Math.min(...nums).toFixed(3)} · mean {mean.toFixed(3)} · max {Math.max(...nums).toFixed(3)}]
+        </span>
+      );
+    }
+    return <span className="font-mono text-xs text-slate-400">[{v.length} items]</span>;
+  }
+  if (typeof v === "object") {
+    return (
+      <div className="border border-border rounded-lg overflow-hidden">
+        <table className="w-full text-xs">
+          <tbody>
+            {Object.entries(v as Record<string, unknown>).map(([k, val]) => (
+              <tr key={k} className="border-b border-border/50 hover:bg-white/[0.02]">
+                <td className="px-3 py-1.5 text-slate-500 font-medium w-36 shrink-0">{k}</td>
+                <td className="px-3 py-1.5">{_renderValue(val)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+  return <span className="font-mono text-xs text-slate-400">{String(v)}</span>;
+}
+
+function GenericOutputView({ data }: { data: NodeAnalysis }) {
+  const raw = data.raw_outputs ?? {};
+  const entries = Object.entries(raw).filter(([, v]) => v !== null && v !== undefined);
+
+  if (entries.length === 0) {
+    return <div className="text-slate-500 text-sm text-center py-12">No output data stored for this node.</div>;
+  }
+
+  return (
+    <div className="pt-4 flex flex-col gap-4">
+      {entries.map(([key, value]) => (
+        <div key={key}>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">
+            {key.replace(/_/g, " ")}
+          </div>
+          {_renderValue(value)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Main panel ───────────────────────────────────────────────────────────────
 
 export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
@@ -446,6 +809,11 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
   const isImmuneBuilder = toolId === "immunebuilder";
   const isHaddock       = toolId === "haddock3";
   const isEquiDock      = toolId === "equidock";
+  const isSuperWater    = toolId === "superwater";
+  const isMegaDock      = toolId === "megadock";
+  const isGromacs       = toolId === "gromacs_mmpbsa";
+  const isStructure     = toolId === "esmfold" || toolId === "alphafold_monomer" || toolId === "equifold";
+  const isSpecialized   = isImmuneBuilder || isHaddock || isEquiDock || isSuperWater || isMegaDock || isGromacs || isStructure;
 
   const availableModels = modelQueries
     .map((q, i) => ({ index: i, data: q.data }))
@@ -456,25 +824,46 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
   const isLoading = isImmuneBuilder
     ? modelQueries.every((q) => q.isLoading)
     : singleQuery.isLoading;
-  const hasError = !isLoading && !isImmuneBuilder && activeData == null && !availableModels.length && !isEquiDock;
+  const hasError = !isLoading && !isImmuneBuilder && activeData == null && !availableModels.length;
 
-  const headerTitle = isImmuneBuilder
-    ? "ImmuneBuilder — Structure Predictions"
-    : isHaddock
-      ? "HADDOCK3 — Docking Results"
-      : isEquiDock
-        ? "EquiDock — Rigid Docking"
-        : (activeData?.plddt as unknown as { gene?: string })?.gene
-          ? `${(activeData?.plddt as unknown as { gene: string }).gene} — AlphaFold Analysis`
-          : "Structure Analysis";
+  const _TOOL_TITLES: Record<string, string> = {
+    immunebuilder: "ImmuneBuilder — Structure Predictions",
+    haddock3: "HADDOCK3 — Docking Results",
+    equidock: "EquiDock — Rigid Docking",
+    superwater: "SuperWater — Hydration Analysis",
+    megadock: "MEGADOCK — Docking Results",
+    gromacs_mmpbsa: "GROMACS MM/GBSA — Binding Affinity",
+    esmfold: "ESMFold — Structure Prediction",
+    alphafold_monomer: "AlphaFold — Structure Prediction",
+    equifold: "EquiFold — Structure Prediction",
+    ablang: "AbLang — Antibody Language Model",
+    abmap: "AbMAP — Antibody Embeddings",
+    proteinmpnn: "ProteinMPNN — Sequence Design",
+    rfdiffusion: "RFdiffusion — Structure Design",
+    biophi: "BioPhi — Humanization",
+    sequence_input: "Sequence Input — Antibody Sequences",
+    sequence_db: "Sequence Library — Entry",
+    target_input: "Target Input — Antigen Structure",
+    compute: "Compute — Custom Code",
+  };
+  const headerTitle = _TOOL_TITLES[toolId ?? ""] ?? (toolId ? `${toolId} — Outputs` : "Node Outputs");
 
-  const headerSub = isImmuneBuilder
-    ? `ABodyBuilder2 / NanoBodyBuilder2 · ${availableModels.length} model(s)`
-    : isHaddock
-      ? "Antibody–antigen complex · top cluster scores"
-      : isEquiDock
-        ? "SE(3)-equivariant neural docking · ICLR 2022"
-        : (activeData?.plddt as unknown as { organism?: string })?.organism;
+  const _TOOL_SUBS: Record<string, string> = {
+    immunebuilder: `ABodyBuilder2 / NanoBodyBuilder2 · ${availableModels.length} model(s)`,
+    haddock3: "Antibody–antigen complex · top cluster scores",
+    equidock: "SE(3)-equivariant neural docking · ICLR 2022",
+    superwater: "ML-predicted explicit water placement · binding-site hydration",
+    megadock: "FFT-based rigid protein-protein docking · rotational search",
+    gromacs_mmpbsa: "Molecular dynamics · MM/GBSA free energy perturbation",
+    ablang: "Per-residue antibody language model embeddings",
+    abmap: "Antibody structure-aware embeddings",
+    proteinmpnn: "Inverse-folding sequence design",
+    compute: "User-defined Python computation",
+  };
+  const _afGene = (activeData?.plddt as unknown as { gene?: string } | null)?.gene;
+  const _afOrg  = (activeData?.plddt as unknown as { organism?: string } | null)?.organism;
+  const headerSub = _TOOL_SUBS[toolId ?? ""]
+    ?? (_afGene ? `${_afGene} — AlphaFold Analysis` : _afOrg ?? undefined);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
@@ -524,8 +913,20 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
           {isEquiDock && activeData && (
             <EquiDockView data={activeData} />
           )}
-          {!isImmuneBuilder && !isHaddock && !isEquiDock && activeData && (
+          {isSuperWater && activeData && (
+            <SuperWaterView data={activeData} />
+          )}
+          {isMegaDock && activeData && (
+            <MegaDockView data={activeData} />
+          )}
+          {isGromacs && activeData && (
+            <GROMACSView data={activeData} />
+          )}
+          {isStructure && activeData && (
             <ModelContent data={activeData} />
+          )}
+          {!isSpecialized && activeData && (
+            <GenericOutputView data={activeData} />
           )}
         </div>
       </div>

@@ -271,26 +271,38 @@ from typing import Any
 from app.config import settings
 from app.models.tool_spec import ToolSpec
 from app.tools.base import RunContext
+from app.tools.cache import ToolCache
 from app.tools.http_tool import post_with_retry   # retries + health check + clear errors
 
 class MyToolAdapter:
     def __init__(self, spec: ToolSpec) -> None:
         self.spec = spec
+        self._cache = ToolCache(tool_id="my_tool", tool_version=spec.version)
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
+        sequence = str(inputs.get("sequence", "")).strip()
+        cache_key = {"sequence": sequence}
+
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            await run_ctx.alog("Cache hit — returning stored result")
+            return cached
+
         await run_ctx.alog(f"Submitting to MyTool at {settings.mytool_url}")
 
         data = await post_with_retry(
             settings.mytool_url,
             "/predict",
-            {"sequence": inputs["sequence"]},
+            {"sequence": sequence},
             tool_name="MyTool",
             timeout=self.spec.runtime.timeout_seconds,
             on_log=run_ctx.alog,    # retry warnings appear in terminal
         )
 
+        outputs = {"structure": data["pdb"], "scores": data.get("scores")}
+        self._cache.put(cache_key, outputs)
         await run_ctx.alog("Done")
-        return {"structure": data["pdb"], "scores": data.get("scores")}
+        return outputs
 ```
 
 `post_with_retry` (in `app/tools/http_tool.py`) does:
@@ -298,6 +310,32 @@ class MyToolAdapter:
 - 3 retries with exponential backoff (2s → 4s → 8s) on connection errors and 5xx responses
 - Extracts `detail` from error responses for readable messages
 - Streams retry warnings through `on_log`
+
+### Caching — required for every adapter
+
+**All adapters must cache results.** Antibody design tools are expensive (seconds to hours of GPU/CPU time). Without a cache, re-running a pipeline after a small change reruns every upstream node from scratch.
+
+- Use `ToolCache` (SQLite, stored at `tools/<name>/cache.db`, excluded from git)
+- Cache key = the exact `dict` sent to the tool — must include **every** field that affects the output
+- Cache key must **not** include run metadata (`run_id`, `node_id`) — they don't change the result
+- Call `self._cache.get(cache_key)` before any I/O; call `self._cache.put(cache_key, outputs)` after success
+- **Never cache partial/error results** — only call `put` after the tool succeeds
+
+```python
+cache_key = {"sequence": sequence, "num_models": num_models}  # all inputs that affect output
+
+cached = self._cache.get(cache_key)
+if cached is not None:
+    await run_ctx.alog("Cache hit — returning stored result")
+    return cached
+
+outputs = ...   # run the tool
+
+self._cache.put(cache_key, outputs)   # only reached on success
+return outputs
+```
+
+The `ToolCache._hash()` SHA-256s the full key content — two PDBs that differ by one atom will produce different hashes. Cache is invalidated automatically when `tool_version` in `tool.yaml` changes.
 
 ### Logging conventions
 
@@ -497,10 +535,70 @@ curl http://localhost:8000/api/tools | python3 -m json.tool | grep '"id"'
 - `run.status` must equal `"running"` in the frontend state
 - The button only shows in `RunPanel.tsx` when `run?.status === "running"`
 
-**Analysis panel shows nothing**
-- Check `nodeRun.outputs` key matches what the adapter returns AND what `hasAnalysis` checks
-- Query the analysis DB: `sqlite3 backend/protein_design.db "SELECT node_id, tool_id FROM node_analyses ORDER BY created_at DESC LIMIT 5;"`
-- Check `GET /api/analysis/runs/{runId}/nodes/{nodeId}` returns data
+**Analysis panel shows nothing / "No analysis data found"**
+
+Follow this checklist in order — each layer can independently break the pipeline:
+
+**1. Is the "Analyze" button visible at all?**
+Check `hasAnalysis` in `RunPanel.tsx`. It shows the button only when specific output keys are non-null:
+```typescript
+nodeRun.outputs?.structure != null    // ESMFold, AlphaFold, EquiDock, HADDOCK3
+nodeRun.outputs?.plddt != null        // ESMFold (list), AlphaFold (dict)
+nodeRun.outputs?.structure_1 != null  // ImmuneBuilder
+nodeRun.outputs?.best_complex != null // HADDOCK3, EquiDock, MEGADOCK
+nodeRun.outputs?.hydrated_structure != null  // SuperWater
+nodeRun.outputs?.top_scores != null   // MEGADOCK
+nodeRun.outputs?.delta_g_bind != null // GROMACS MM/GBSA
+```
+If your tool outputs a different key, add it here. Use `!= null` (not `!== undefined`) — null and undefined differ in JavaScript.
+
+**2. Was the analysis actually saved to the DB?**
+```bash
+sqlite3 backend/protein_design.db \
+  "SELECT run_id, node_id, tool_id, created_at FROM node_analyses ORDER BY created_at DESC LIMIT 10;"
+```
+If the row is missing, check `executor.py` `execute_run()`. Each tool in `_ANALYSIS_TOOLS` must have a branch that calls `_save_analysis()`. The save only fires when the key output is truthy (e.g., `if struct:` for structure tools). If the tool ran but produced no output (e.g., HADDOCK3 found no poses → `best_complex = None`), analysis is intentionally not saved and the button should not appear — see step 1 if the button incorrectly showed.
+
+**3. Does the API return the saved data?**
+```bash
+curl http://localhost:8000/api/analysis/runs/{runId}/nodes/{nodeId}/
+```
+If 404: the analysis row wasn't saved (→ step 2).
+If 200 but missing fields: `analysis.py`'s return dict doesn't include the tool's custom keys. Add them:
+```python
+# backend/app/api/analysis.py — get_node_analysis()
+return {
+    ...
+    "my_field": data.get("my_field"),
+}
+```
+Also add the field to `NodeAnalysis` in `frontend/src/api/analysis.ts`.
+
+**4. Does the frontend render it?**
+`AnalysisPanel.tsx` routes by `tool_id`:
+```typescript
+const isHaddock  = toolId === "haddock3";
+const isMegaDock = toolId === "megadock";
+const isGromacs  = toolId === "gromacs_mmpbsa";
+// etc.
+```
+If there's no dedicated view for your tool, it falls through to `ModelContent`, which only renders `data.plddt` and `data.structure`. Add a dedicated `<MyToolView>` component if the tool has custom output fields.
+
+**Per-tool summary — what each tool stores and where:**
+
+| Tool | Key that triggers "Analyze" button | Saved in `executor.py` branch | Dedicated view |
+|---|---|---|---|
+| `immunebuilder` | `structure_1` | `{node_id}_model_{1..4}` node IDs | `ImmuneBuilderGrid` |
+| `esmfold` | `structure` or `plddt` | generic `elif "structure"…` | `ModelContent` (pLDDT chart) |
+| `alphafold_monomer` | `structure` or `plddt` | generic `elif "structure"…` | `ModelContent` (pLDDT + PAE) |
+| `haddock3` | `best_complex` | explicit branch, saves as `structure`+`plddt` | `HADDOCK3View` |
+| `equidock` | `best_complex` | explicit branch, saves as `structure`+`plddt` | `EquiDockView` |
+| `megadock` | `best_complex` or `top_scores` | **results_collector only** (executor must NOT double-save) | `MegaDockView` |
+| `superwater` | `hydrated_structure` | explicit branch, saves as `structure`+`water_count` | `SuperWaterView` |
+| `gromacs_mmpbsa` | `delta_g_bind` | explicit branch, saves custom keys | `GROMACSView` |
+
+**Common mistake — megadock double-save:**
+`results_collector._collect_megadock_analysis` saves a comprehensive row (top_scores, complex_pdbs, etc.). Do NOT also call `_save_analysis` in `executor.py` for megadock — it would overwrite with a stripped version and the `MegaDockView` would lose its data.
 
 ---
 
@@ -609,6 +707,12 @@ const showContext = isRunning && runningLines.length === 0 && !!lastNode;
 
 ---
 
+**HADDOCK3 `clean_steps` compresses PDB outputs — read .pdb.gz, not .pdb**
+
+HADDOCK3 runs its own `clean_steps` after each workflow module completes. This compresses `.pdb` files to `.pdb.gz` and deletes the originals. Any code that reads HADDOCK3 output PDB files after the run must handle both `.pdb` and `.pdb.gz`. Use `gzip.open(path, "rt")` for the compressed form. Fallback glob patterns must also include `*.pdb.gz` variants. The temp directory is still alive when this code runs (cleanup happens after `json.dump`), so the compressed files ARE accessible — they just need `gzip.open`.
+
+---
+
 **NumPy 2.x breaks PyTorch < 2.2 silently**
 
 Any tool using `torch < 2.2` will fail with cryptic import errors (`ImportError: numpy.core._multiarray_umath`) if NumPy ≥ 2.0 is installed. Always pin `numpy<2` when installing tools that use older torch versions.
@@ -621,6 +725,8 @@ Any tool using `torch < 2.2` will fail with cryptic import errors (`ImportError:
 [ ] tool.yaml has working defaults (drag-drop → Run works immediately)
 [ ] Large defaults use default_file: not default: (keeps API payload small)
 [ ] Lazy imports inside invoke()
+[ ] ToolCache wired: __init__ creates self._cache; invoke() checks get() before running, calls put() after success
+[ ] Cache key includes every field that affects output; excludes run_id / node_id
 [ ] run_ctx.log() / await run_ctx.alog() at start, each major step, end
 [ ] Pattern B: run_id=run_ctx.run_id passed to run_tool_subprocess
 [ ] Multi-output tools pad unused slots with None
@@ -631,6 +737,7 @@ Any tool using `torch < 2.2` will fail with cryptic import errors (`ImportError:
 [ ] Paper added to playground/papers.ts
 [ ] Test: drag node with no connections → Run → succeeds with defaults
 [ ] Test: connect sequence_input → new_tool → Run → succeeds
+[ ] Test: run twice with same inputs → second run logs "Cache hit" and returns instantly
 [ ] TypeScript compiles: cd frontend && npx tsc --noEmit
 [ ] Backend starts cleanly: backend/.venv/bin/uvicorn app.main:app --reload
 ```

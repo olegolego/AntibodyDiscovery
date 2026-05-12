@@ -7,36 +7,56 @@ links them by molecule_id so results from the same antibody are traceable.
 import json
 from typing import Any
 
+from sqlalchemy import select
+
 from app.db.models import (
     DockingResultRow,
     DesignSequenceRow,
     EmbeddingRow,
     MoleculeRow,
+    NodeAnalysisRow,
     StructureRow,
 )
 from app.db.session import AsyncSessionLocal
 from app.models.run import Run
 
 
-# ── Molecule registry (in-memory within a run to avoid redundant DB lookups) ──
+# ── Molecule registry (in-memory to avoid redundant DB lookups within a session) ──
 
-_run_molecule_cache: dict[str, str] = {}  # run_id -> molecule_id
+_molecule_cache: dict[str, str] = {}  # "{heavy[:40]}:{light[:40]}" -> molecule_id
 
 
 async def _get_or_create_molecule(
     run: Run, inputs: dict[str, Any]
 ) -> str | None:
-    """Find or create a MoleculeRow for the VH/VL sequences in inputs."""
+    """Find or create a MoleculeRow for the VH/VL sequences in inputs.
+
+    Deduplicates by (heavy_chain, light_chain) across all runs so that repeated
+    runs of the same sequence accumulate results under one molecule record.
+    """
     heavy = str(inputs.get("heavy_chain") or "").strip()
     light = str(inputs.get("light_chain") or "").strip()
     if not heavy:
         return None
 
-    cache_key = f"{run.id}:{heavy[:40]}:{light[:40]}"
-    if cache_key in _run_molecule_cache:
-        return _run_molecule_cache[cache_key]
+    cache_key = f"{heavy[:40]}:{light[:40]}"
+    if cache_key in _molecule_cache:
+        return _molecule_cache[cache_key]
 
     async with AsyncSessionLocal() as db:
+        # Look up existing molecule with this exact (VH, VL) pair
+        existing = (await db.execute(
+            select(MoleculeRow)
+            .where(MoleculeRow.heavy_chain == heavy,
+                   MoleculeRow.light_chain == (light or None))
+            .order_by(MoleculeRow.created_at.asc())
+            .limit(1)
+        )).scalar_one_or_none()
+
+        if existing is not None:
+            _molecule_cache[cache_key] = existing.id
+            return existing.id
+
         mol = MoleculeRow(
             run_id=run.id,
             pipeline_id=run.pipeline_id,
@@ -47,7 +67,7 @@ async def _get_or_create_molecule(
         db.add(mol)
         await db.commit()
         await db.refresh(mol)
-        _run_molecule_cache[cache_key] = mol.id
+        _molecule_cache[cache_key] = mol.id
         return mol.id
 
 
@@ -102,7 +122,8 @@ async def _collect_structure(
 async def _collect_docking(
     run: Run, node_id: str, tool_id: str, inputs: dict, outputs: dict, molecule_id: str | None
 ) -> None:
-    best = outputs.get("best_complex")
+    # MEGADOCK uses complex_1…complex_N keys; HADDOCK/EquiDock use best_complex
+    best = outputs.get("best_complex") or outputs.get("complex_1")
     if not best:
         return
     antigen = inputs.get("antigen") or inputs.get("receptor") or ""
@@ -119,6 +140,38 @@ async def _collect_docking(
             best_complex_pdb=best,
             scores=json.dumps(scores) if scores else None,
             extra_data=json.dumps(meta) if meta else None,
+        )
+        db.add(row)
+        await db.commit()
+
+
+async def _collect_megadock_analysis(
+    run: Run, node_id: str, outputs: dict,
+) -> None:
+    """Save MEGADOCK top-N complexes + scores to NodeAnalysisRow for the analysis panel."""
+    top_scores = outputs.get("top_scores", [])
+    if not top_scores:
+        return
+    # Collect all complex PDBs keyed by rank
+    complex_pdbs: dict[str, str] = {}
+    for entry in top_scores:
+        rank = entry.get("rank")
+        pdb = outputs.get(f"complex_{rank}")
+        if pdb:
+            complex_pdbs[str(rank)] = pdb
+    data = {
+        "structure": outputs.get("complex_1"),   # best complex for 3-D viewer default
+        "top_scores": top_scores,
+        "complex_pdbs": complex_pdbs,
+        "metadata": outputs.get("metadata") or {},
+        "image": outputs.get("image"),
+    }
+    async with AsyncSessionLocal() as db:
+        row = NodeAnalysisRow(
+            run_id=run.id,
+            node_id=node_id,
+            tool_id="megadock",
+            data=json.dumps(data),
         )
         db.add(row)
         await db.commit()
@@ -156,6 +209,26 @@ async def _collect_embedding(
         await db.commit()
 
 
+async def _collect_superwater(
+    run: Run, node_id: str, tool_id: str, outputs: dict, molecule_id: str | None
+) -> None:
+    pdb = outputs.get("hydrated_structure")
+    if not pdb or not isinstance(pdb, str) or len(pdb) <= 10:
+        return
+    water_count = outputs.get("water_count") or {}
+    async with AsyncSessionLocal() as db:
+        row = StructureRow(
+            molecule_id=molecule_id,
+            run_id=run.id,
+            node_id=node_id,
+            tool_id=tool_id,
+            pdb_data=pdb,
+            confidence=json.dumps(water_count),
+        )
+        db.add(row)
+        await db.commit()
+
+
 async def _collect_gromacs_mmpbsa(
     run: Run, node_id: str, tool_id: str, inputs: dict, outputs: dict, molecule_id: str | None
 ) -> None:
@@ -188,7 +261,7 @@ async def _collect_gromacs_mmpbsa(
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-_STRUCTURE_TOOLS = {"immunebuilder", "esmfold", "alphafold_monomer"}
+_STRUCTURE_TOOLS = {"immunebuilder", "esmfold", "alphafold_monomer", "equifold"}
 _DESIGN_TOOLS    = {"proteinmpnn", "rfdiffusion", "biophi"}
 _EMBEDDING_TOOLS = {"abmap", "ablang"}
 
@@ -203,9 +276,6 @@ async def collect(
 ) -> None:
     """Called by executor after every successful node. Fire-and-forget safe."""
     try:
-        # Resolve molecule_id from sequence in this or any upstream node
-        molecule_id = _run_molecule_cache.get(f"{run.id}:")
-
         # Try to find sequences from current inputs or upstream sequence_input node
         seq_inputs = {**inputs}
         for prior_outputs in node_outputs.values():
@@ -222,6 +292,10 @@ async def collect(
             await _collect_structure(run, node_id, tool_id, inputs, outputs, molecule_id)
         elif tool_id in ("haddock3", "equidock", "megadock"):
             await _collect_docking(run, node_id, tool_id, inputs, outputs, molecule_id)
+            if tool_id == "megadock":
+                await _collect_megadock_analysis(run, node_id, outputs)
+        elif tool_id == "superwater":
+            await _collect_superwater(run, node_id, tool_id, outputs, molecule_id)
         elif tool_id == "gromacs_mmpbsa":
             await _collect_gromacs_mmpbsa(run, node_id, tool_id, inputs, outputs, molecule_id)
         elif tool_id in _DESIGN_TOOLS:

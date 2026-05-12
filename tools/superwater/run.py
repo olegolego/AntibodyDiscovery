@@ -69,6 +69,39 @@ def _find_python() -> str:
     )
 
 
+def _extract_first_model(pdb_text: str) -> str:
+    """Return the first MODEL block's ATOM/HETATM lines with MODEL/ENDMDL stripped.
+
+    Some tools (MEGADOCK decoygen, certain docking exporters) write `MODEL` without
+    a serial number, e.g. just `MODEL\n`.  BioPython's PDBParser cannot assign a
+    numeric model-ID in that case, so structure[0] raises a KeyError, which
+    SuperWater's get_complex() catches and treats as a fatal skip — leaving the
+    complex list empty and causing an IndexError in preprocessing().
+
+    Stripping MODEL/ENDMDL and keeping only the first model's records lets
+    BioPython create a single-model structure with its default id=0.
+    """
+    lines = pdb_text.splitlines()
+    if not any(line.startswith("MODEL") for line in lines):
+        return pdb_text  # already fine — no MODEL records
+
+    result: list[str] = []
+    in_first = False
+    seen_model = False
+    for line in lines:
+        if line.startswith("MODEL"):
+            if seen_model:
+                break       # second MODEL block — discard rest
+            seen_model = True
+            in_first = True
+            continue        # drop the MODEL line itself
+        if line.startswith("ENDMDL"):
+            break           # end of first block
+        if in_first:
+            result.append(line)
+    return "\n".join(result) + "\n"
+
+
 def main() -> None:
     inputs = json.load(sys.stdin)
 
@@ -79,6 +112,8 @@ def main() -> None:
     if not pdb_text or "ATOM" not in pdb_text:
         print(json.dumps({"error": "structure input is empty or contains no ATOM records"}))
         sys.exit(1)
+
+    pdb_text = _extract_first_model(pdb_text)
 
     repo  = _find_repo()
     python = _find_python()
@@ -198,7 +233,12 @@ def main() -> None:
             p.unlink(missing_ok=True)
         # Remove embeddings (can be large)
         shutil.rmtree(str(repo / "data" / emb_out), ignore_errors=True)  # type: ignore[possibly-undefined]
-        # Keep inference_out for debugging; remove on next run if needed
+        # Remove per-run confidence cache dirs (named with org_name, accumulate across runs)
+        import glob as _glob
+        for cache_dir in _glob.glob(str(repo / "data" / "cache_confidence" / f"limit0_INDEX{org_name}_*")):
+            shutil.rmtree(cache_dir, ignore_errors=True)
+        # Remove inference output for this run
+        shutil.rmtree(str(repo / "inference_out" / pred_dir), ignore_errors=True)
 
 
 if __name__ == "__main__":

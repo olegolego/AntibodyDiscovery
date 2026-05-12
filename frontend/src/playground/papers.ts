@@ -8,6 +8,14 @@ export interface PaperInfo {
 }
 
 export const TOOL_PAPERS: Record<string, PaperInfo> = {
+  equifold: {
+    title: "EquiFold: Protein Structure Prediction with a Novel Coarse-Grained Structure Representation",
+    authors: "Lee et al.",
+    year: "2023",
+    journal: "bioRxiv",
+    pdfUrl: "https://www.biorxiv.org/content/10.1101/2022.10.07.511322v1.full.pdf",
+    abstractUrl: "https://doi.org/10.1101/2022.10.07.511322",
+  },
   immunebuilder: {
     title: "ImmuneBuilder: Deep-Learning models for predicting the structures of immune proteins",
     authors: "Abanades et al.",

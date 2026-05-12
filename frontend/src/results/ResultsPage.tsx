@@ -2,7 +2,7 @@ import { useState } from "react";
 import ReactDOM from "react-dom";
 import { ArrowLeft, BookOpen, Database, Dna, FlaskConical, Layers, Play, X, Zap } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { listCollections, createCollection, addEntry } from "@/api/sequences";
+import { listDatasets, createDataset, addEntry } from "@/api/datasets";
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
@@ -148,30 +148,30 @@ function RunLink({ runId, onOpenRun }: { runId: string; onOpenRun: (id: string) 
 
 function SaveToLibraryModal({ mol, onClose }: { mol: MoleculeDetail; onClose: () => void }) {
   const queryClient = useQueryClient();
-  const { data: collections } = useQuery({ queryKey: ["seq-collections"], queryFn: listCollections });
-  const [collId, setCollId] = useState<string>("");
+  const { data: datasets } = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
+  const [dsId, setDsId] = useState<string>("");
   const [newName, setNewName] = useState("");
   const [savedOk, setSavedOk] = useState(false);
   const [errMsg, setErrMsg] = useState("");
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      let targetCollId = collId;
-      if (collId === "__new__") {
-        if (!newName.trim()) throw new Error("Collection name is required");
-        const coll = await createCollection(newName.trim());
-        targetCollId = coll.id;
+      let targetDsId = dsId;
+      if (dsId === "__new__") {
+        if (!newName.trim()) throw new Error("Dataset name is required");
+        const ds = await createDataset(newName.trim());
+        targetDsId = ds.id;
       }
-      if (!targetCollId) throw new Error("Select a collection");
-      return addEntry(targetCollId, {
+      if (!targetDsId) throw new Error("Select a dataset");
+      return addEntry(targetDsId, {
         name: mol.name ?? undefined,
-        heavy_chain: mol.heavy_chain!,
+        heavy_chain: mol.heavy_chain ?? undefined,
         light_chain: mol.light_chain ?? undefined,
         source_molecule_id: mol.id,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["seq-collections"] });
+      queryClient.invalidateQueries({ queryKey: ["datasets"] });
       setSavedOk(true);
       setErrMsg("");
     },
@@ -202,23 +202,23 @@ function SaveToLibraryModal({ mol, onClose }: { mol: MoleculeDetail; onClose: ()
           </div>
 
           <div>
-            <label className="text-xs text-slate-500 block mb-1">Collection</label>
+            <label className="text-xs text-slate-500 block mb-1">Dataset</label>
             <select
-              value={collId}
-              onChange={(e) => { setCollId(e.target.value); setSavedOk(false); }}
+              value={dsId}
+              onChange={(e) => { setDsId(e.target.value); setSavedOk(false); }}
               className="w-full bg-canvas border border-border rounded-lg px-3 py-2 text-sm text-slate-300 focus:outline-none focus:border-amber-500/60"
             >
-              <option value="">— Select collection —</option>
-              {collections?.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+              <option value="">— Select dataset —</option>
+              {datasets?.map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
               ))}
-              <option value="__new__">+ New collection…</option>
+              <option value="__new__">+ New dataset…</option>
             </select>
           </div>
 
-          {collId === "__new__" && (
+          {dsId === "__new__" && (
             <div>
-              <label className="text-xs text-slate-500 block mb-1">New collection name</label>
+              <label className="text-xs text-slate-500 block mb-1">New dataset name</label>
               <input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
@@ -239,7 +239,7 @@ function SaveToLibraryModal({ mol, onClose }: { mol: MoleculeDetail; onClose: ()
             {!savedOk && (
               <button
                 onClick={() => saveMutation.mutate()}
-                disabled={saveMutation.isPending || !collId}
+                disabled={saveMutation.isPending || !dsId}
                 className="px-4 py-1.5 rounded-lg text-sm font-semibold text-white
                   bg-amber-600 hover:bg-amber-500 disabled:opacity-40 transition-all"
               >

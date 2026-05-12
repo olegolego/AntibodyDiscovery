@@ -3,7 +3,7 @@ import { api } from "./client";
 export interface ColumnDef {
   id: string;
   name: string;
-  type: "text" | "number" | "select" | "boolean";
+  type: "text" | "number" | "select" | "boolean" | "pdb";
   options?: string[];
   required?: boolean;
 }

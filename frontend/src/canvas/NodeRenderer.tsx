@@ -570,6 +570,84 @@ export function EquiDockNode({ id, selected }: NodeProps<NodeData>) {
   );
 }
 
+// ── SuperWater node — named output handles ───────────────────────────────────
+
+export function SuperWaterNode({ id, selected }: NodeProps<NodeData>) {
+  const runStatus    = useCanvasStore((s) => s.runNodeStatuses[id]);
+  const nodeOutputs  = useCanvasStore((s) => s.runNodeOutputs[id]);
+  const style        = CATEGORY_STYLE["toolbox"];
+
+  const hasHydrated  = nodeOutputs?.["hydrated_structure"] != null;
+  const waterCount   = (nodeOutputs?.["water_count"] as { waters_placed?: number } | undefined)?.waters_placed;
+
+  return (
+    <div
+      style={{
+        borderColor: style.border,
+        boxShadow: selected
+          ? `0 0 0 2px ${style.border}99, 0 4px 28px ${style.glow}`
+          : `0 4px 20px ${style.glow}`,
+      }}
+      className={`relative bg-surface2 border-2 rounded-xl px-3.5 py-2.5 min-w-[188px] min-h-[110px]
+        transition-shadow ${runStatus ? STATUS_RING[runStatus] ?? "" : ""}`}
+    >
+      {/* Input handle */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="structure"
+        style={{ top: "50%", background: style.border }}
+        title="structure: pdb — wire from ImmuneBuilder, ESMFold, HADDOCK3, etc."
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className={`text-[10px] font-semibold uppercase tracking-wider mb-0.5 ${style.label}`}>
+            Toolbox
+          </div>
+          <div className="text-sm font-bold text-white leading-tight">SuperWater</div>
+        </div>
+        {runStatus && STATUS_DOT[runStatus] && (
+          <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
+        )}
+      </div>
+
+      {/* Water count badge (visible after run) */}
+      {waterCount != null && (
+        <div className="mt-1 text-[9px] text-fuchsia-300 font-mono">
+          {waterCount} waters placed
+        </div>
+      )}
+
+      {/* Output handle labels — inside right edge */}
+      <div className="absolute right-4 top-0 bottom-0 flex flex-col justify-around py-3 pointer-events-none pr-1 items-end">
+        <span className="text-[9px] font-bold text-fuchsia-300 leading-none">PDB</span>
+        <span className="text-[9px] font-bold text-slate-400 leading-none">H₂O</span>
+      </div>
+
+      {/* Output handles */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="hydrated_structure"
+        style={{ top: "35%", background: hasHydrated ? "#34d399" : "#818cf8" }}
+        title="hydrated_structure: pdb — wire to GROMACS (enable keep_explicit_waters)"
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="water_count"
+        style={{ top: "65%", background: "#64748b" }}
+        title="water_count: json — { waters_placed }"
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+    </div>
+  );
+}
+
 // ── Compute node ─────────────────────────────────────────────────────────────
 
 export function ComputeNode({ id, selected }: NodeProps<NodeData>) {

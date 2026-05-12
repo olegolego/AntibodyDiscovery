@@ -16,19 +16,10 @@ import threading
 import time
 from pathlib import Path
 
-_HERE          = Path(__file__).resolve().parent
-_BIN           = _HERE / "bin"
-_MEGADOCK      = _BIN / "megadock"
-_MEGADOCK_METAL = _BIN / "megadock-metal"
-_DECOYGEN      = _BIN / "decoygen"
-
-
-def _pick_megadock_binary() -> Path:
-    """Return megadock-metal on Apple Silicon when available, else megadock."""
-    import platform
-    if platform.machine() == "arm64" and _MEGADOCK_METAL.exists():
-        return _MEGADOCK_METAL
-    return _MEGADOCK
+_HERE     = Path(__file__).resolve().parent
+_BIN      = _HERE / "bin"
+_MEGADOCK = _BIN / "megadock"
+_DECOYGEN = _BIN / "decoygen"
 
 _MAX_RECEPTOR_RESIDUES = 600
 
@@ -94,6 +85,14 @@ def _parse_scores(out_file: Path) -> list[dict]:
     return [{"rank": i + 1, "score": s} for i, s in enumerate(scores)]
 
 
+def _extract_atoms(pdb_text: str) -> str:
+    """Return only ATOM/HETATM/TER lines, stripping MODEL/ENDMDL records."""
+    return "\n".join(
+        l for l in pdb_text.splitlines()
+        if l.startswith(("ATOM", "HETATM", "TER"))
+    )
+
+
 def _render_docking_image(complex_pdb: str, rank: int = 1) -> str:
     """2-D Cα scatter of docked complex, chains colored individually. Returns data-URL or ''."""
     import base64, io
@@ -155,15 +154,12 @@ def _run(inputs: dict) -> dict:
     if not ligand_pdb:
         raise ValueError("ligand PDB is required")
 
-    megadock_bin = _pick_megadock_binary()
+    megadock_bin = _MEGADOCK
     if not megadock_bin.exists():
         raise FileNotFoundError(
             f"MEGADOCK binary not found at {megadock_bin}.\n"
-            f"Run: bash {_HERE}/setup.sh  (CPU)  or\n"
-            f"     bash {_HERE}/setup_apple_silicon.sh  (Metal GPU, Apple Silicon)"
+            f"Run: bash {_HERE}/setup.sh"
         )
-    if megadock_bin == _MEGADOCK_METAL:
-        _progress("Using megadock-metal (Apple Silicon GPU)")
 
     # Trim large receptors to avoid memory/time explosion
     receptor_pdb = _trim_to_best_chain(receptor_pdb)
@@ -173,8 +169,9 @@ def _run(inputs: dict) -> dict:
         rec_path = tmpdir / "receptor.pdb"
         lig_path = tmpdir / "ligand.pdb"
         out_path = tmpdir / "output.out"
-        rec_path.write_text(receptor_pdb)
-        lig_path.write_text(ligand_pdb)
+        # Strip MODEL/ENDMDL so MEGADOCK's PDB parser doesn't stop early
+        rec_path.write_text(_extract_atoms(receptor_pdb) + "\nEND\n")
+        lig_path.write_text(_extract_atoms(ligand_pdb) + "\nEND\n")
 
         cmd = [
             str(megadock_bin),
@@ -187,13 +184,7 @@ def _run(inputs: dict) -> dict:
         if rot_sampling == 54000:
             cmd.append("-D")
 
-        # Metal binary: use all physical CPU cores for maximum throughput.
-        # Each OMP thread handles one rotation via Metal GPU + CPU FFT.
         env = os.environ.copy()
-        if megadock_bin == _MEGADOCK_METAL:
-            import multiprocessing
-            ncpu = str(multiprocessing.cpu_count())
-            env.setdefault("OMP_NUM_THREADS", ncpu)
 
         _progress(
             f"MEGADOCK docking | {rot_sampling} rotations | top {num_pred} predictions"
@@ -238,10 +229,7 @@ def _run(inputs: dict) -> dict:
         scores = _parse_scores(out_path)[:num_pred]
 
         # Generate docked complexes via decoygen
-        receptor_atom_lines = "\n".join(
-            l for l in receptor_pdb.splitlines()
-            if l.startswith("ATOM") or l.startswith("HETATM")
-        )
+        receptor_atom_lines = _extract_atoms(rec_path.read_text())
 
         top_results: list[dict] = []
         for entry in scores:
@@ -260,11 +248,10 @@ def _run(inputs: dict) -> dict:
                 continue
             docked_lig_text = out_lig.read_text()
             complex_pdb = (
-                f"MODEL {rank}\n"
-                + docked_lig_text.rstrip()
-                + "\n"
+                _extract_atoms(docked_lig_text)
+                + "\nTER\n"
                 + receptor_atom_lines
-                + "\nENDMDL\n"
+                + "\nEND\n"
             )
             top_results.append({
                 "rank":        rank,

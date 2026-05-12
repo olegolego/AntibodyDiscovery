@@ -1,14 +1,86 @@
-"""WebSocket endpoint for live Compute node code execution."""
+"""WebSocket endpoint for live Compute node code execution + AI code generation."""
 import asyncio
 import io
 import json
+import os
+import re
 import sys
 import traceback
 from typing import Any
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+import httpx
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 
 router = APIRouter()
+
+# ── AI code generation ────────────────────────────────────────────────────────
+
+_ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
+_MODEL = "claude-sonnet-4-6"
+
+_SYSTEM_PROMPT = """\
+You are a Python code generator embedded in an antibody design pipeline.
+The user will describe a computation in plain language. You write Python 3.11
+code that performs that computation and assigns the final result to a variable
+named `result`.
+
+Rules:
+- Always assign the final answer to `result`.
+- Standard library and numpy (as np), scipy, json, math, re, collections are available.
+- PDB data is a plain string in PDB format. Sequence data is a plain amino-acid string.
+- Do NOT use print() for the result — only assign `result`.
+- Return ONLY the Python code. No markdown fences, no explanation, no comments."""
+
+
+class _VarInfo(BaseModel):
+    name: str
+    type: str
+
+
+class GenerateCodeRequest(BaseModel):
+    prompt: str
+    variables: list[_VarInfo] = []
+
+
+def _extract_code(text: str) -> str:
+    fenced = re.search(r"```(?:python)?\n(.*?)```", text, re.DOTALL)
+    return fenced.group(1).strip() if fenced else text.strip()
+
+
+@router.post("/generate")
+async def generate_code(body: GenerateCodeRequest) -> dict[str, str]:
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="ANTHROPIC_API_KEY is not set on the server.",
+        )
+
+    var_lines = "\n".join(f"  {v.name}: {v.type}" for v in body.variables) or "  (none)"
+    user_msg = f"Available variables:\n{var_lines}\n\nRequest: {body.prompt}"
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            _ANTHROPIC_API_URL,
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": _MODEL,
+                "max_tokens": 1024,
+                "system": _SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": user_msg}],
+            },
+        )
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Anthropic API error: {resp.text}")
+
+    code = _extract_code(resp.json()["content"][0]["text"])
+    return {"code": code}
 
 
 async def _exec_with_stream(

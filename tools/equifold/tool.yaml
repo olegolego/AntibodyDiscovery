@@ -1,0 +1,41 @@
+id: equifold
+name: EquiFold
+version: "1.0.0"
+category: structure_prediction
+description: >
+  Fast antibody/protein structure prediction via a coarse-grained equivariant
+  neural network (Genentech / Prescient Design, 2023). Takes heavy + light chain
+  sequences, returns a full-atom PDB in seconds on CPU. Complement to
+  ImmuneBuilder: EquiFold is fast for screening; ImmuneBuilder gives an ensemble
+  with per-residue confidence. No GPU required.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: true
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS"
+    description: >
+      VH amino acid sequence, single-letter, no FASTA headers.
+      Minimum ~80 AA (full variable domain). Wire from Sequence Input or Sequence Library.
+
+  - name: light_chain
+    type: fasta
+    required: false
+    default: "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+    description: >
+      VL amino acid sequence, single-letter, no FASTA headers. Optional.
+      Omit for VH-only (nanobody / VHH) prediction.
+
+outputs:
+  - name: structure
+    type: pdb
+    description: "Full-atom PDB of the predicted antibody/protein structure."
+
+  - name: metadata
+    type: json
+    description: "Heavy/light chain lengths and model type used."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 300

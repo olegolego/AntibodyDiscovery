@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, X, FlaskConical, Square } from "lucide-react";
+import { ChevronDown, ChevronRight, X, FlaskConical, Square, FileBarChart } from "lucide-react";
 import { useRunWebSocket } from "@/hooks/useRunWebSocket";
 import { useCanvasStore } from "@/canvas/store";
 import type { NodeRun, NodeRunStatus, Run, RunStatus } from "@/types";
@@ -38,10 +38,13 @@ function NodeRunRow({ nodeRun, onAnalysis }: NodeRunRowProps) {
   const [open, setOpen] = useState(nodeRun.status === "failed");
   const hasDetail = nodeRun.logs.length > 0 || nodeRun.error;
   const hasAnalysis = nodeRun.status === "succeeded" && (
-    nodeRun.outputs?.structure !== undefined ||
-    nodeRun.outputs?.plddt !== undefined ||
-    nodeRun.outputs?.structure_1 !== undefined ||
-    nodeRun.outputs?.best_complex !== undefined
+    nodeRun.outputs?.structure != null ||
+    nodeRun.outputs?.plddt != null ||
+    nodeRun.outputs?.structure_1 != null ||
+    nodeRun.outputs?.best_complex != null ||
+    nodeRun.outputs?.hydrated_structure != null ||
+    nodeRun.outputs?.top_scores != null ||
+    nodeRun.outputs?.delta_g_bind != null
   );
 
   return (
@@ -195,6 +198,7 @@ interface RunPanelProps {
   runId: string;
   onClose: () => void;
   onOpenAnalysis: (runId: string, nodeId: string) => void;
+  onViewReport?: (runId: string) => void;
 }
 
 function useElapsed(createdAt: string | undefined, active: boolean): string {
@@ -213,7 +217,7 @@ function useElapsed(createdAt: string | undefined, active: boolean): string {
   return elapsed;
 }
 
-export function RunPanel({ runId, onClose, onOpenAnalysis }: RunPanelProps) {
+export function RunPanel({ runId, onClose, onOpenAnalysis, onViewReport }: RunPanelProps) {
   const [run, setRun] = useState<Run | null>(null);
   const setRunNodeStatuses = useCanvasStore((s) => s.setRunNodeStatuses);
   const setRunNodeOutputs = useCanvasStore((s) => s.setRunNodeOutputs);
@@ -257,6 +261,17 @@ export function RunPanel({ runId, onClose, onOpenAnalysis }: RunPanelProps) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
         <span className="text-sm font-bold text-white">Run Status</span>
         <div className="flex items-center gap-2">
+          {(run?.status === "succeeded" || run?.status === "failed") && onViewReport && (
+            <button
+              onClick={() => onViewReport(runId)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
+                text-slate-300 bg-white/5 border border-border hover:bg-white/10 hover:text-white
+                transition-colors"
+            >
+              <FileBarChart size={10} />
+              Report
+            </button>
+          )}
           {run?.status === "running" && (
             <button
               onClick={handleStop}

@@ -37,7 +37,18 @@ from app.tools.registry import _SENTINEL_PREFIX
 from app.tools.subprocess_runner import kill_subprocess
 from app.workers.tasks import dispatch_tool
 
-_ANALYSIS_TOOLS = {"alphafold_monomer", "esmfold", "immunebuilder", "haddock3", "equidock", "megadock", "gromacs_mmpbsa"}
+_ANALYSIS_TOOLS = {"alphafold_monomer", "esmfold", "immunebuilder", "haddock3", "equidock", "equifold", "megadock", "gromacs_mmpbsa", "superwater"}
+
+def _strip_for_generic_analysis(outputs: dict[str, Any]) -> dict[str, Any]:
+    """Strip large PDB strings and float embedding arrays before saving generic analysis."""
+    result = {}
+    for k, v in outputs.items():
+        if isinstance(v, str) and len(v) > 10_000:
+            continue  # large PDB / FASTA blob
+        if isinstance(v, list) and len(v) > 100 and v and isinstance(v[0], (int, float)):
+            continue  # embedding vector
+        result[k] = v
+    return result
 _cancelled_runs: set[str] = set()
 
 
@@ -127,6 +138,9 @@ async def execute_run(run_id: str) -> None:
     await _emit(run)
 
     node_outputs: dict[str, dict[str, Any]] = {}
+    # Tracks nodes that failed or were skipped due to a failed parent.
+    # Used to propagate "skip" to all transitive dependents.
+    failed_node_ids: set[str] = set()
 
     for node_id in order:
         # Check if cancelled before starting next node
@@ -142,6 +156,16 @@ async def execute_run(run_id: str) -> None:
 
         node = next(n for n in pipeline.nodes if n.id == node_id)
         node_run = run.nodes[node_id]
+
+        # Skip this node if any of its direct parents failed / were skipped.
+        parent_ids = {e.source.split(".")[0] for e in pipeline.edges if e.target.split(".")[0] == node_id}
+        if parent_ids & failed_node_ids:
+            node_run.status = NodeRunStatus.SKIPPED
+            failed_node_ids.add(node_id)  # propagate so dependents are also skipped
+            await _save_run(run)
+            await _emit(run)
+            continue
+
         node_run.status = NodeRunStatus.RUNNING
         await _save_run(run)
         await _emit(run)
@@ -150,10 +174,10 @@ async def execute_run(run_id: str) -> None:
         if spec is None:
             node_run.status = NodeRunStatus.FAILED
             node_run.error = f"Unknown tool: {node.tool}"
-            run.status = RunStatus.FAILED
+            failed_node_ids.add(node_id)
             await _save_run(run)
             await _emit(run)
-            return
+            continue
 
         # Merge static params with resolved upstream outputs.
         # Resolve any __default_file__ sentinels to their actual file content.
@@ -192,10 +216,10 @@ async def execute_run(run_id: str) -> None:
         except Exception as exc:
             node_run.status = NodeRunStatus.FAILED
             node_run.error = str(exc)
-            run.status = RunStatus.FAILED
+            failed_node_ids.add(node_id)
             await _save_run(run)
             await _emit(run)
-            return
+            continue
 
         node_run.outputs = outputs
         node_run.status = NodeRunStatus.SUCCEEDED
@@ -217,11 +241,7 @@ async def execute_run(run_id: str) -> None:
                     await _save_analysis(run.id, node_id, node.tool,
                                          {"structure": struct, "plddt": meta})
             elif node.tool == "megadock":
-                struct = outputs.get("best_complex")
-                meta = outputs.get("metadata") or {}
-                if struct:
-                    await _save_analysis(run.id, node_id, node.tool,
-                                         {"structure": struct, "plddt": meta})
+                pass  # results_collector._collect_megadock_analysis saves the full analysis row
             elif node.tool == "immunebuilder":
                 error_estimates = outputs.get("error_estimates") or []
                 for i in range(1, 5):
@@ -245,13 +265,26 @@ async def execute_run(run_id: str) -> None:
                         "energy_decomposition": outputs.get("energy_decomposition") or {},
                         "md_convergence": outputs.get("md_convergence") or {},
                     })
+            elif node.tool == "superwater":
+                struct = outputs.get("hydrated_structure")
+                water_count = outputs.get("water_count") or {}
+                if struct:
+                    await _save_analysis(run.id, node_id, node.tool, {
+                        "structure": struct,
+                        "water_count": water_count,
+                    })
             elif "structure" in outputs or "plddt" in outputs:
                 await _save_analysis(run.id, node_id, node.tool, outputs)
+        else:
+            # Generic analysis for all non-structure tools (AbLang, AbMAP, ProteinMPNN, compute, etc.)
+            stripped = _strip_for_generic_analysis(outputs)
+            if stripped:
+                await _save_analysis(run.id, node_id, node.tool, stripped)
 
         await _save_run(run)
         await _emit(run)
 
-    run.status = RunStatus.SUCCEEDED
+    run.status = RunStatus.FAILED if failed_node_ids else RunStatus.SUCCEEDED
     await _save_run(run)
     await _emit(run)
 

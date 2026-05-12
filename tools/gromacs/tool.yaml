@@ -91,6 +91,16 @@ inputs:
       Analyze every Nth frame in the trajectory for MM/GBSA. Higher = faster
       but noisier. 1 = every frame, 5 = every 5th frame (default).
 
+  - name: keep_explicit_waters
+    type: bool
+    required: false
+    default: false
+    description: >
+      Preserve explicit water molecules (HOH/WAT) from the input PDB instead of
+      stripping them during complex preparation. Enable when wiring from SuperWater
+      so that predicted binding-site waters are included in the simulation.
+      pdb2gmx will include them in the topology as crystallographic waters.
+
 outputs:
   - name: delta_g_bind
     type: float

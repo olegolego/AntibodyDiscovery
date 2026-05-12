@@ -87,9 +87,11 @@ class ImmuneBuilderAdapter:
         model_ids = list(range(1, num_models + 1))
         await run_ctx.alog(f"Running prediction ({num_models} models)…")
 
+        import asyncio
+
         predictor = Builder(model_ids=model_ids)
         try:
-            antibody = predictor.predict(seqs)
+            antibody = await asyncio.to_thread(predictor.predict, seqs)
         except Exception as exc:
             msg = str(exc)
             if "not recognised as an L chain" in msg and mode == "antibody":
@@ -98,7 +100,7 @@ class ImmuneBuilderAdapter:
                 predictor = NanoBodyBuilder2(model_ids=model_ids)
                 seqs = {"H": heavy}
                 mode = "nanobody"
-                antibody = predictor.predict(seqs)
+                antibody = await asyncio.to_thread(predictor.predict, seqs)
             else:
                 raise
 
@@ -142,7 +144,8 @@ class ImmuneBuilderAdapter:
                 refined_path = os.path.join(tmpdir, f"rank{rank}_refined.pdb")
                 try:
                     from ImmuneBuilder.refine import refine as ib_refine  # type: ignore
-                    if ib_refine(pdb_path, refined_path):
+                    ok = await asyncio.to_thread(ib_refine, pdb_path, refined_path)
+                    if ok:
                         pdb_path = refined_path
                         await run_ctx.alog(f"Rank {rank} refined ✓")
                     else:

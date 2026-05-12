@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Play, RefreshCw, Code2 } from "lucide-react";
+import { X, Play, RefreshCw, Code2, Sparkles, Loader2 } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -76,6 +76,11 @@ function ComputePanelInner({
   const wsRef = useRef<WebSocket | null>(null);
   const outputEndRef = useRef<HTMLDivElement>(null);
 
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
   // Build variable list: each var is prefixed with the source node ID.
   // e.g. ablang_1_embedding, ablang_2_embedding — always unique, always traceable.
   const incomingVars = (() => {
@@ -118,6 +123,34 @@ function ComputePanelInner({
 
   function setCode(newCode: string) {
     updateNodeParams(node.id, { ...data.params, code: newCode });
+  }
+
+  async function handleAiGenerate() {
+    if (!aiPrompt.trim()) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const resp = await fetch("/ws/compute/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          prompt: aiPrompt,
+          variables: incomingVars.map((v) => ({ name: v.varName, type: v.type })),
+        }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error(err.detail ?? "Generation failed");
+      }
+      const { code: generated } = await resp.json() as { code: string };
+      setCode(generated);
+      setAiOpen(false);
+      setAiPrompt("");
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiLoading(false);
+    }
   }
 
   function handleRun() {
@@ -219,6 +252,44 @@ function ComputePanelInner({
           )}
         </div>
 
+        {/* AI generate bar */}
+        {aiOpen && (
+          <div className="px-3 py-2.5 border-b border-border/60 bg-violet-950/20 shrink-0 space-y-2">
+            <textarea
+              autoFocus
+              rows={2}
+              className="w-full bg-canvas border border-violet-700/40 rounded-lg px-3 py-2 text-xs
+                text-slate-200 placeholder-slate-600 resize-none focus:outline-none
+                focus:border-violet-500/60 font-sans leading-relaxed"
+              placeholder="Describe what to compute… e.g. 'average pLDDT score across all residues'"
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleAiGenerate();
+                if (e.key === "Escape") { setAiOpen(false); setAiError(null); }
+              }}
+            />
+            {aiError && (
+              <p className="text-[11px] text-red-400">{aiError}</p>
+            )}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleAiGenerate}
+                disabled={aiLoading || !aiPrompt.trim()}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+                  bg-violet-600 text-white hover:bg-violet-500 disabled:opacity-50
+                  disabled:cursor-not-allowed transition-all"
+              >
+                {aiLoading
+                  ? <><Loader2 size={11} className="animate-spin" /><span>Generating…</span></>
+                  : <><Sparkles size={11} /><span>Generate</span></>
+                }
+              </button>
+              <span className="text-[10px] text-slate-600">⌘↵ to generate · Esc to cancel</span>
+            </div>
+          </div>
+        )}
+
         {/* Code editor */}
         <div className="flex-1 overflow-hidden min-h-0">
           <CodeMirror
@@ -259,6 +330,18 @@ function ComputePanelInner({
                 <span>Run</span>
               </>
             )}
+          </button>
+          <button
+            onClick={() => { setAiOpen((v) => !v); setAiError(null); }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+              border transition-all ${
+                aiOpen
+                  ? "bg-violet-700/40 text-violet-200 border-violet-600/60"
+                  : "text-violet-400 border-violet-700/40 hover:bg-violet-900/30 hover:text-violet-300"
+              }`}
+          >
+            <Sparkles size={11} />
+            <span>Generate with AI</span>
           </button>
           {output.length > 0 && !running && (
             <button

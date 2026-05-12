@@ -35,6 +35,18 @@ async def get_node_analysis(run_id: str, node_id: str) -> dict[str, Any]:
         "structure": data.get("structure"),
         "plddt": data.get("plddt"),
         "pae": data.get("pae"),
+        "water_count": data.get("water_count"),
+        # megadock-specific
+        "top_scores": data.get("top_scores"),
+        "complex_pdbs": data.get("complex_pdbs"),
+        "docking_metadata": data.get("metadata"),
+        "image": data.get("image"),
+        # gromacs_mmpbsa-specific
+        "delta_g_bind": data.get("delta_g_bind"),
+        "energy_decomposition": data.get("energy_decomposition"),
+        "md_convergence": data.get("md_convergence"),
+        # generic — all stored keys, used by the fallback output viewer
+        "raw_outputs": data,
     }
 
 

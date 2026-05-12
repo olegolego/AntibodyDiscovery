@@ -251,7 +251,7 @@ def _regenerate_reference_pdb(
 
 # ── Complex pre-processing ────────────────────────────────────────────────────
 
-def _prepare_complex_pdb(pdb_text: str) -> str:
+def _prepare_complex_pdb(pdb_text: str, keep_explicit_waters: bool = False) -> str:
     """Strip HETATM/MODEL, translate displaced chains, and emit TER between chains.
 
     MEGADOCK places the docked structure at an arbitrary FFT grid offset — often
@@ -267,6 +267,8 @@ def _prepare_complex_pdb(pdb_text: str) -> str:
        far-away coordinates when the protein chains are translated → editconf
        builds a 500 Å simulation box.
        Fix: strip all HETATM lines; pdb2gmx does not need them.
+       Exception: if keep_explicit_waters=True, HOH/WAT HETATM lines from
+       SuperWater are preserved so pdb2gmx includes them in the topology.
 
     3. Chain centroids can be 20-40 nm apart.
        Fix: translate each outlier chain to sit 15 Å from the reference centroid.
@@ -277,11 +279,17 @@ def _prepare_complex_pdb(pdb_text: str) -> str:
     chain_order: list[str] = []          # chains in appearance order
     chain_atoms: dict[str, list] = {}    # ch → list of ATOM lines
     chain_ca:    dict[str, list] = {}    # ch → list of [x,y,z] for CA atoms
+    water_lines: list[str] = []          # HOH/WAT HETATM lines (kept when requested)
 
     for line in pdb_text.splitlines():
-        if line.startswith(("MODEL", "ENDMDL", "TER", "END", "CONECT", "REMARK",
-                             "HETATM", "ANISOU")):
-            continue  # strip everything except ATOM records
+        if line.startswith(("MODEL", "ENDMDL", "TER", "END", "CONECT", "REMARK", "ANISOU")):
+            continue
+        if line.startswith("HETATM"):
+            if keep_explicit_waters:
+                res_name = line[17:20].strip().upper() if len(line) > 20 else ""
+                if res_name in ("HOH", "WAT", "SOL"):
+                    water_lines.append(line)
+            continue  # strip non-water HETATM regardless
         if not line.startswith("ATOM"):
             continue
         ch = line[21] if len(line) > 21 else " "
@@ -349,6 +357,11 @@ def _prepare_complex_pdb(pdb_text: str) -> str:
                     pass
             result.append(line)
         result.append("TER")  # always emit TER — pdb2gmx uses this to split chains
+
+    if water_lines:
+        result.extend(water_lines)
+        result.append("TER")
+        _progress(f"  Preserved {len(water_lines)} explicit water atoms (HOH/WAT) from SuperWater")
 
     result.append("END")
     return "\n".join(result) + "\n"
@@ -893,10 +906,11 @@ def _md_convergence_stats(work_dir: Path, job_name: str, gmx: str) -> Dict:
 # ── Main pipeline ──────────────────────────────────────────────────────────────
 
 def _run_pipeline(inputs: dict) -> dict:
-    complex_pdb     = str(inputs.get("complex_pdb", "")).strip()
-    receptor_chains = str(inputs.get("receptor_chains", "H,L")).strip()
-    ligand_chains   = str(inputs.get("ligand_chains", "B")).strip()
-    forcefield      = str(inputs.get("forcefield", "amber99sb-ildn")).strip()
+    complex_pdb            = str(inputs.get("complex_pdb", "")).strip()
+    receptor_chains        = str(inputs.get("receptor_chains", "H,L")).strip()
+    ligand_chains          = str(inputs.get("ligand_chains", "B")).strip()
+    forcefield             = str(inputs.get("forcefield", "amber99sb-ildn")).strip()
+    keep_explicit_waters   = bool(inputs.get("keep_explicit_waters", False))
     water_model     = str(inputs.get("water_model", "tip3p")).strip()
     temperature_k   = float(inputs.get("temperature_k", 300.0))
     ion_conc        = float(inputs.get("ion_concentration", 0.15))
@@ -930,7 +944,12 @@ def _run_pipeline(inputs: dict) -> dict:
     try:
         # Write input PDB (translate displaced chains back to receptor centroid)
         pdb_path = work_dir / "input_complex.pdb"
-        pdb_path.write_text(_prepare_complex_pdb(complex_pdb), encoding="utf-8")
+        pdb_path.write_text(
+            _prepare_complex_pdb(complex_pdb, keep_explicit_waters=keep_explicit_waters),
+            encoding="utf-8",
+        )
+        if keep_explicit_waters:
+            _progress("  Explicit waters from SuperWater will be included in topology")
 
         # [1/9] Topology
         _progress("\n[1/9] Generating topology (pdb2gmx)…")

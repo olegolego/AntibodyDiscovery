@@ -1,6 +1,6 @@
 id: haddock3
 name: HADDOCK3 Docking
-version: "3.0"
+version: "3.0.1"
 category: docking
 description: >
   Antibody-antigen docking using HADDOCK3. Provide the antibody PDB (e.g. from ImmuneBuilder),

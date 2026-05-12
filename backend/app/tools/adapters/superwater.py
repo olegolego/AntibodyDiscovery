@@ -5,6 +5,7 @@ from typing import Any
 
 from app.models.tool_spec import ToolSpec
 from app.tools.base import RunContext
+from app.tools.cache import ToolCache
 from app.tools.subprocess_runner import run_tool_subprocess
 
 _CONDA_ROOTS = [
@@ -27,6 +28,7 @@ def _find_superwater_python() -> str | None:
 class SuperWaterAdapter:
     def __init__(self, spec: ToolSpec) -> None:
         self.spec = spec
+        self._cache = ToolCache(tool_id="superwater", tool_version=spec.version)
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
         # Accept structure from common upstream port names
@@ -45,18 +47,18 @@ class SuperWaterAdapter:
         water_ratio = float(inputs.get("water_ratio", 1.0))
         cap         = float(inputs.get("cap", 0.1))
 
+        cache_key = {"structure": structure, "water_ratio": water_ratio, "cap": cap}
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            await run_ctx.alog("Cache hit — returning stored SuperWater result")
+            return cached
+
         python_path = _find_superwater_python()
         if python_path is None:
             raise FileNotFoundError(
                 "SuperWater conda environment not found. "
                 "Run: bash tools/superwater/setup.sh"
             )
-
-        payload = {
-            "structure":   structure,
-            "water_ratio": water_ratio,
-            "cap":         cap,
-        }
 
         await run_ctx.alog(
             f"SuperWater: predicting water positions "
@@ -68,7 +70,7 @@ class SuperWaterAdapter:
 
         outputs = await run_tool_subprocess(
             tool_id="superwater",
-            inputs=payload,
+            inputs=cache_key,
             timeout=self.spec.runtime.timeout_seconds,
             on_log=run_ctx.alog,
             run_id=run_ctx.run_id,
@@ -80,4 +82,5 @@ class SuperWaterAdapter:
             f"SuperWater: placed {wc.get('waters_placed', '?')} water molecules"
         )
 
+        self._cache.put(cache_key, outputs)
         return outputs

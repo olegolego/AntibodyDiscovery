@@ -1,16 +1,21 @@
+import json
+import logging
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy import select
 
 from app.api import analysis, artifacts, compute, datasets, pipelines, results, runs, sequences, tools, ws
 from app.config import settings
-from app.db.models import Base
-from app.db.session import engine
+from app.db.models import Base, RunRow
+from app.db.session import AsyncSessionLocal, engine
 from app.tools.registry import tool_registry
 
+logger = logging.getLogger(__name__)
 _TOOLS_DIR = Path(__file__).parent.parent.parent / "tools"
 
 
@@ -29,16 +34,45 @@ async def _migrate(conn) -> None:
             pass  # column already exists
 
 
+async def _mark_orphaned_runs() -> None:
+    """Mark any runs left in running/queued as failed — they were interrupted by a server restart."""
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(RunRow).where(RunRow.status.in_(["running", "queued"]))
+            )
+        ).scalars().all()
+        if not rows:
+            return
+        for row in rows:
+            try:
+                data = json.loads(row.data)
+                data["status"] = "failed"
+                for node in data.get("nodes", {}).values():
+                    if node.get("status") in ("running", "queued", "pending"):
+                        node["status"] = "failed"
+                        node["error"] = "Interrupted by server restart"
+                row.status = "failed"
+                row.data = json.dumps(data)
+                row.updated_at = datetime.utcnow()
+            except Exception:
+                row.status = "failed"
+                row.updated_at = datetime.utcnow()
+        await db.commit()
+        logger.warning("Marked %d orphaned run(s) as failed (server restart)", len(rows))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await _migrate(conn)
+    await _mark_orphaned_runs()
     tool_registry.load()
     yield
     await engine.dispose()
 
 
-app = FastAPI(title="Protein Design Platform API", version="0.1.0", lifespan=lifespan, redirect_slashes=False)
+app = FastAPI(title="Protein Design Platform API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

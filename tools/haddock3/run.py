@@ -4,6 +4,7 @@ Runs inside tools/haddock3/.venv — do NOT run with backend venv python.
 """
 import csv
 import glob
+import gzip
 import json
 import os
 import shutil
@@ -121,8 +122,7 @@ run_dir = "{run_dir}"
 mode = "local"
 ncores = 4
 self_contained = true
-postprocess = true
-clean = true
+postprocess = false
 
 molecules = [
     "antibody_clean.pdb",
@@ -197,6 +197,23 @@ def _parse_capri(tsv_path: str) -> dict:
     return result
 
 
+def _flatten_pdb(pdb_text: str) -> str:
+    """Strip MODEL/ENDMDL records so NGL sees a single flat structure with all chains."""
+    lines = [l for l in pdb_text.splitlines() if not l.startswith(("MODEL", "ENDMDL"))]
+    # Ensure a single END record at the end
+    while lines and lines[-1].strip() in ("END", ""):
+        lines.pop()
+    return "\n".join(lines) + "\nEND\n"
+
+
+def _read_pdb(path: str) -> str:
+    """Read a PDB file, decompressing .pdb.gz automatically."""
+    if path.endswith(".gz"):
+        with gzip.open(path, "rt") as fh:
+            return fh.read()
+    return open(path).read()
+
+
 def _best_complex(tsv_path: str) -> str | None:
     best_path, best_rank = None, float("inf")
     with open(tsv_path) as f:
@@ -212,21 +229,30 @@ def _best_complex(tsv_path: str) -> str | None:
                     )
             except Exception:
                 pass
-    if best_path and os.path.exists(best_path):
-        print(f"Best complex: {best_path} (rank {best_rank})", file=sys.stderr, flush=True)
-        return open(best_path).read()
-    # Path from TSV not found — search run directory broadly for any docked PDB
+    # HADDOCK3 clean_steps compresses .pdb → .pdb.gz after each module step.
+    # Check for both the uncompressed and compressed path from the TSV.
+    for candidate in ([best_path, best_path + ".gz"] if best_path else []):
+        if candidate and os.path.exists(candidate):
+            print(f"Best complex: {candidate} (rank {best_rank})", file=sys.stderr, flush=True)
+            return _flatten_pdb(_read_pdb(candidate))
+    # Path from TSV not found — search run directory for docked PDB or PDB.GZ
     run_dir = os.path.dirname(os.path.dirname(tsv_path))
     for pattern in [
         os.path.join(run_dir, "*_seletopclusts", "cluster_1_model_1.pdb"),
+        os.path.join(run_dir, "*_seletopclusts", "cluster_1_model_1.pdb.gz"),
         os.path.join(run_dir, "*_seletopclusts", "*.pdb"),
+        os.path.join(run_dir, "*_seletopclusts", "*.pdb.gz"),
+        os.path.join(run_dir, "*_emref", "emref_1.pdb"),
+        os.path.join(run_dir, "*_emref", "emref_1.pdb.gz"),
+        os.path.join(run_dir, "*_flexref", "flexref_1.pdb"),
+        os.path.join(run_dir, "*_flexref", "flexref_1.pdb.gz"),
         os.path.join(run_dir, "*_rigidbody", "rigidbody_1.pdb"),
-        os.path.join(run_dir, "**", "*.pdb"),
+        os.path.join(run_dir, "*_rigidbody", "rigidbody_1.pdb.gz"),
     ]:
-        pdbs = sorted(glob.glob(pattern, recursive=True))
+        pdbs = sorted(glob.glob(pattern, recursive=False))
         if pdbs:
             print(f"Fallback best complex: {pdbs[0]}", file=sys.stderr, flush=True)
-            return open(pdbs[0]).read()
+            return _flatten_pdb(_read_pdb(pdbs[0]))
     print("WARNING: no docked PDB found anywhere in run dir", file=sys.stderr, flush=True)
     return None
 

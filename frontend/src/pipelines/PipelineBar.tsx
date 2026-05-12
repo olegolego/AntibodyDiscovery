@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { BookOpen, ChevronDown, Database, FilePlus, FlaskConical, FolderOpen, Play, Save, Terminal, Trash2 } from "lucide-react";
+import { BookOpen, ChevronDown, ClipboardList, Database, FilePlus, FlaskConical, FolderOpen, Play, Save, Terminal, Trash2 } from "lucide-react";
 import { usePipelines, savePipeline, deletePipeline } from "@/api/pipelines";
 import { useCanvasStore } from "@/canvas/store";
 import { useTools } from "@/api/tools";
@@ -18,6 +18,7 @@ interface PipelineBarProps {
   onOpenResults: () => void;
   onOpenLibrary: () => void;
   onOpenTerminal: () => void;
+  onOpenRuns: () => void;
   onNewPipeline: () => void;
 }
 
@@ -30,7 +31,7 @@ function ts(iso: string | undefined): string {
 
 export function PipelineBar({
   name, onNameChange, onRun, running, pipelineId, onPipelineIdChange,
-  onOpenPlayground, onOpenResults, onOpenLibrary, onOpenTerminal, onNewPipeline,
+  onOpenPlayground, onOpenResults, onOpenLibrary, onOpenTerminal, onOpenRuns, onNewPipeline,
 }: PipelineBarProps) {
   const [showLoad, setShowLoad] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -236,6 +237,17 @@ export function PipelineBar({
       >
         <FlaskConical size={13} />
         <span>Playground</span>
+      </button>
+
+      {/* Run History */}
+      <button
+        onClick={onOpenRuns}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+          text-slate-400 hover:text-white border border-transparent
+          hover:border-sky-500/40 hover:bg-sky-500/10 transition-all"
+      >
+        <ClipboardList size={13} />
+        <span>Runs</span>
       </button>
 
       {/* Results DB */}

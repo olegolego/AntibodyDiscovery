@@ -10,7 +10,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 
 import { useCanvasStore } from "./store";
-import { ToolNode, SequenceInputNode, SequenceDbNode, TargetInputNode, ImmuneBuilderNode, MegaDockNode, HADDOCK3Node, EquiDockNode, ComputeNode } from "./NodeRenderer";
+import { ToolNode, SequenceInputNode, SequenceDbNode, TargetInputNode, ImmuneBuilderNode, MegaDockNode, HADDOCK3Node, EquiDockNode, SuperWaterNode, ComputeNode } from "./NodeRenderer";
 import type { ToolSpec } from "@/types";
 
 const NODE_TYPES = {
@@ -22,6 +22,7 @@ const NODE_TYPES = {
   megadockNode: MegaDockNode,
   haddock3Node: HADDOCK3Node,
   equidockNode: EquiDockNode,
+  superWaterNode: SuperWaterNode,
   computeNode: ComputeNode,
 };
 

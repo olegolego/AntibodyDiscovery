@@ -22,7 +22,7 @@ class GROMACSAdapter:
                     inputs["complex_pdb"] = v
                     break
         if not inputs.get("complex_pdb"):
-            for k in ("best_complex", "structure", "pdb"):
+            for k in ("best_complex", "hydrated_structure", "structure", "pdb"):
                 v = inputs.get(k)
                 if isinstance(v, str) and "ATOM" in v:
                     inputs["complex_pdb"] = v
@@ -30,15 +30,17 @@ class GROMACSAdapter:
 
         if not inputs.get("complex_pdb") or "ATOM" not in str(inputs.get("complex_pdb", "")):
             raise ValueError(
-                "complex_pdb is required (wire from HADDOCK3 best_complex or EquiDock best_complex)"
+                "complex_pdb is required — wire from HADDOCK3 best_complex, "
+                "EquiDock best_complex, or SuperWater hydrated_structure"
             )
 
-        receptor_chains = str(inputs.get("receptor_chains", "H,L")).strip()
-        ligand_chains   = str(inputs.get("ligand_chains", "B")).strip()
-        production_ns   = float(inputs.get("production_ns", 10.0))
-        temperature_k   = float(inputs.get("temperature_k", 300.0))
-        ion_conc        = float(inputs.get("ion_concentration", 0.15))
-        discard_ns      = float(inputs.get("discard_ns", 1.0))
+        receptor_chains       = str(inputs.get("receptor_chains", "H,L")).strip()
+        ligand_chains         = str(inputs.get("ligand_chains", "B")).strip()
+        production_ns         = float(inputs.get("production_ns", 10.0))
+        temperature_k         = float(inputs.get("temperature_k", 300.0))
+        ion_conc              = float(inputs.get("ion_concentration", 0.15))
+        discard_ns            = float(inputs.get("discard_ns", 1.0))
+        keep_explicit_waters  = bool(inputs.get("keep_explicit_waters", False))
 
         if not receptor_chains:
             raise ValueError("receptor_chains is required (e.g. 'H,L' or 'A')")
@@ -50,17 +52,18 @@ class GROMACSAdapter:
             )
 
         cache_key = {
-            "complex_pdb":       inputs["complex_pdb"],
-            "receptor_chains":   receptor_chains,
-            "ligand_chains":     ligand_chains,
-            "forcefield":        str(inputs.get("forcefield", "amber99sb-ildn")),
-            "water_model":       str(inputs.get("water_model", "tip3p")),
-            "temperature_k":     temperature_k,
-            "ion_concentration": ion_conc,
-            "production_ns":     production_ns,
-            "discard_ns":        discard_ns,
-            "igb":               int(inputs.get("igb", 5)),
-            "mmpbsa_interval":   int(inputs.get("mmpbsa_interval", 5)),
+            "complex_pdb":           inputs["complex_pdb"],
+            "receptor_chains":       receptor_chains,
+            "ligand_chains":         ligand_chains,
+            "forcefield":            str(inputs.get("forcefield", "amber99sb-ildn")),
+            "water_model":           str(inputs.get("water_model", "tip3p")),
+            "temperature_k":         temperature_k,
+            "ion_concentration":     ion_conc,
+            "production_ns":         production_ns,
+            "discard_ns":            discard_ns,
+            "igb":                   int(inputs.get("igb", 5)),
+            "mmpbsa_interval":       int(inputs.get("mmpbsa_interval", 5)),
+            "keep_explicit_waters":  keep_explicit_waters,
         }
 
         cached = self._cache.get(cache_key)
@@ -73,6 +76,7 @@ class GROMACSAdapter:
             f"receptor={receptor_chains}, ligand={ligand_chains} | "
             f"{production_ns} ns @ {temperature_k} K | "
             f"discard={discard_ns} ns"
+            + (" | keep_explicit_waters=True" if keep_explicit_waters else "")
         )
         await run_ctx.alog(
             f"Estimated wall time: {production_ns * 6:.0f}–{production_ns * 24:.0f} min "
