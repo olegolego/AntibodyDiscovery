@@ -25,9 +25,13 @@ _ADAPTER_MAP = {
     "pdbfixer":          ("app.tools.adapters.pdbfixer",  "PDBFixerAdapter"),
     "superwater":        ("app.tools.adapters.superwater","SuperWaterAdapter"),
     "compute":           ("app.tools.adapters.compute",   "ComputeAdapter"),
+    "loop":              ("app.tools.adapters.loop",      "LoopAdapter"),
     "custom_dnn":        ("app.tools.adapters.toolbox",   "ToolboxAdapter"),
     "diffusion_design":  ("app.tools.adapters.toolbox",   "ToolboxAdapter"),
     "property_predictor":("app.tools.adapters.toolbox",   "ToolboxAdapter"),
+    "cdr_mutator":       ("app.tools.adapters.cdr_mutator", "CDRMutatorAdapter"),
+    "esm_embedding":     ("app.tools.adapters.esm_embedding",  "ESMEmbeddingAdapter"),
+    "cheap_embedding":   ("app.tools.adapters.cheap_embedding", "CHEAPEmbeddingAdapter"),
 }
 
 

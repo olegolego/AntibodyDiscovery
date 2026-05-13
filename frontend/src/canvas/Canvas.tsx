@@ -10,7 +10,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 
 import { useCanvasStore } from "./store";
-import { ToolNode, SequenceInputNode, SequenceDbNode, TargetInputNode, ImmuneBuilderNode, MegaDockNode, HADDOCK3Node, EquiDockNode, SuperWaterNode, ComputeNode } from "./NodeRenderer";
+import { ToolNode, SequenceInputNode, SequenceDbNode, TargetInputNode, ImmuneBuilderNode, MegaDockNode, HADDOCK3Node, EquiDockNode, SuperWaterNode, ComputeNode, CDRMutatorNode } from "./NodeRenderer";
 import type { ToolSpec } from "@/types";
 
 const NODE_TYPES = {
@@ -23,7 +23,8 @@ const NODE_TYPES = {
   haddock3Node: HADDOCK3Node,
   equidockNode: EquiDockNode,
   superWaterNode: SuperWaterNode,
-  computeNode: ComputeNode,
+  computeNode:    ComputeNode,
+  cdrMutatorNode: CDRMutatorNode,
 };
 
 interface CanvasProps {
@@ -37,8 +38,9 @@ export function Canvas({ onNodeClick }: CanvasProps) {
     addToolNode, selectNode,
   } = useCanvasStore();
 
-  // Subscribe separately so edge styles react immediately when node statuses change
+  // Subscribe separately so edge styles react immediately when statuses / selection change
   const runNodeStatuses = useCanvasStore((s) => s.runNodeStatuses);
+  const selectedNodeId  = useCanvasStore((s) => s.selectedNodeId);
 
   const styledEdges = useMemo<Edge[]>(() =>
     edges.map((e) => {
@@ -46,20 +48,21 @@ export function Canvas({ onNodeClick }: CanvasProps) {
       const srcRunning = runNodeStatuses[e.source] === "running";
       const srcDone    = runNodeStatuses[e.source] === "succeeded";
 
-      // Incoming edges to a running node brighten; outgoing from a running node too
-      const active = tgtRunning || srcRunning;
-      // Green only once source is done and neither end is currently running
-      const done   = srcDone && !active;
+      const active   = tgtRunning || srcRunning;
+      const done     = srcDone && !active;
+      const selected = selectedNodeId !== null &&
+                       (e.source === selectedNodeId || e.target === selectedNodeId);
 
       return {
         ...e,
         animated: active,
-        style: active ? { stroke: "#93c5fd", strokeWidth: 3 }
-             : done   ? { stroke: "#34d399", strokeWidth: 1.5 }
-             :          { stroke: "#374151", strokeWidth: 1.5 },
+        style: selected ? { stroke: "#fbbf24", strokeWidth: 2.5 }
+             : active   ? { stroke: "#93c5fd", strokeWidth: 3 }
+             : done     ? { stroke: "#34d399", strokeWidth: 1.5 }
+             :             { stroke: "#374151", strokeWidth: 1.5 },
       };
     }),
-  [edges, runNodeStatuses]);
+  [edges, runNodeStatuses, selectedNodeId]);
 
   const handleNodeClick: NodeMouseHandler = useCallback(
     (_event, node) => {

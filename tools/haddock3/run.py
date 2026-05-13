@@ -86,33 +86,78 @@ def _extract_vh_sequence(pdb_path: str) -> str:
     return seq
 
 
-def _detect_cdrs_chothia(pdb_path: str) -> tuple[list[int], list[int], list[int]] | None:
+_VALID_SCHEMES = {"chothia", "kabat", "imgt", "martin", "aho"}
+
+
+def _detect_cdrs(pdb_path: str, scheme: str = "chothia", scfv: bool = False) -> tuple[list[int], list[int], list[int]]:
     """
-    Use abnumber/ANARCI to detect CDR-H1/2/3 as 1-based sequential residue numbers
-    matching the sequential numbering produced by pdb_reres -1 on the same PDB.
-    Returns (cdr1, cdr2, cdr3) lists or None on failure.
+    Detect CDR-H1/2/3 residue positions using ANARCI via abnumber.
+
+    Returns (cdr1, cdr2, cdr3) as lists of 1-based sequential residue numbers
+    matching the renumbering produced by `pdb_reres -1` on the same PDB.
+    Raises RuntimeError if detection fails.
     """
-    try:
-        from abnumber import Chain  # requires anarci in the same venv
-        seq = _extract_vh_sequence(pdb_path)
-        if len(seq) < 50:
-            return None
-        chain = Chain(seq, scheme="chothia")
-        all_pos = list(chain.positions.keys())
-        pos_to_seq = {p: i + 1 for i, p in enumerate(all_pos)}
-        cdr1 = sorted(pos_to_seq[p] for p in chain.cdr1_dict if p in pos_to_seq)
-        cdr2 = sorted(pos_to_seq[p] for p in chain.cdr2_dict if p in pos_to_seq)
-        cdr3 = sorted(pos_to_seq[p] for p in chain.cdr3_dict if p in pos_to_seq)
-        if not (cdr1 and cdr2 and cdr3):
-            return None
-        _progress(
-            f"ANARCI CDR detection (Chothia): "
-            f"H1={cdr1[0]}-{cdr1[-1]}, H2={cdr2[0]}-{cdr2[-1]}, H3={cdr3[0]}-{cdr3[-1]}"
+    import warnings
+    from abnumber import Chain
+
+    scheme = scheme.lower().strip()
+    if scheme not in _VALID_SCHEMES:
+        raise RuntimeError(
+            f"Unknown numbering scheme '{scheme}'. "
+            f"Valid options: {', '.join(sorted(_VALID_SCHEMES))}"
         )
-        return cdr1, cdr2, cdr3
-    except Exception as exc:
-        _progress(f"WARN: CDR auto-detection failed ({exc}); falling back to provided positions")
-        return None
+
+    seq = _extract_vh_sequence(pdb_path)
+    if len(seq) < 50:
+        raise RuntimeError(
+            f"Antibody sequence too short ({len(seq)} residues) for CDR numbering. "
+            "Check that the antibody PDB contains a full VH domain."
+        )
+
+    domains: list = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            domains = [Chain(seq, scheme=scheme)]
+        except Exception:
+            pass
+
+    # ScFv / multi-domain: try multiple_domains() when single-chain parse fails
+    if scfv or not domains:
+        try:
+            domains = Chain.multiple_domains(seq, scheme=scheme)
+        except Exception as exc:
+            raise RuntimeError(
+                f"ANARCI CDR detection failed with scheme '{scheme}': {exc}"
+            ) from exc
+
+    if not domains:
+        raise RuntimeError(
+            f"ANARCI found no antibody domains in the sequence using scheme '{scheme}'."
+        )
+
+    # Prefer the first heavy-chain domain; fall back to whatever domain is present
+    vh_domain = next((d for d in domains if d.chain_type == "H"), domains[0])
+
+    all_pos = list(vh_domain.positions.keys())
+    pos_to_seq = {p: i + 1 for i, p in enumerate(all_pos)}
+    cdr1 = sorted(pos_to_seq[p] for p in vh_domain.cdr1_dict if p in pos_to_seq)
+    cdr2 = sorted(pos_to_seq[p] for p in vh_domain.cdr2_dict if p in pos_to_seq)
+    cdr3 = sorted(pos_to_seq[p] for p in vh_domain.cdr3_dict if p in pos_to_seq)
+
+    if not (cdr1 and cdr2 and cdr3):
+        raise RuntimeError(
+            f"ANARCI returned empty CDR loops using scheme '{scheme}'. "
+            "Try a different numbering scheme."
+        )
+
+    _progress(
+        f"CDR detection ({scheme}): "
+        f"H1={cdr1[0]}-{cdr1[-1]} ({len(cdr1)} res), "
+        f"H2={cdr2[0]}-{cdr2[-1]} ({len(cdr2)} res), "
+        f"H3={cdr3[0]}-{cdr3[-1]} ({len(cdr3)} res)"
+    )
+    return cdr1, cdr2, cdr3
 
 
 def _write_config(path: str, run_dir: str, sampling: int, select_top: int) -> None:
@@ -142,14 +187,14 @@ sampling = {sampling}
 select = {select_top}
 
 [flexref]
-tolerance = 5
+tolerance = 50
 ambig_fname = "ambig-restraints.tbl"
 unambig_fname = "antibody-unambig.tbl"
 
 [caprieval]
 
 [emref]
-tolerance = 5
+tolerance = 50
 ambig_fname = "ambig-restraints.tbl"
 unambig_fname = "antibody-unambig.tbl"
 
@@ -277,9 +322,7 @@ def main() -> None:
     antigen_chains     = str(inputs.get("antigen_chains", "")).strip().upper()
     antigen_active     = str(inputs.get("antigen_active_residues", "")).strip()
     antigen_passive    = str(inputs.get("antigen_passive_residues", "")).strip()
-    cdr1 = (int(inputs.get("cdr1_start", 26)), int(inputs.get("cdr1_end", 35)))
-    cdr2 = (int(inputs.get("cdr2_start", 50)), int(inputs.get("cdr2_end", 58)))
-    cdr3 = (int(inputs.get("cdr3_start", 95)), int(inputs.get("cdr3_end", 102)))
+    numbering_scheme = str(inputs.get("numbering_scheme", "chothia")).strip().lower()
     vh    = str(inputs.get("vh_chain", "H")).upper()
     vl    = str(inputs.get("vl_chain", "L") or "").upper()
     sampling   = max(1, int(inputs.get("rigid_sampling", 100)))
@@ -295,7 +338,45 @@ def main() -> None:
         open(os.path.join(d, "antibody_raw.pdb"), "w").write(antibody_pdb)
         open(os.path.join(d, "antigen_raw.pdb"),  "w").write(antigen_pdb)
 
-        _progress(f"Cleaning antibody ({'nanobody' if nanobody else 'VH+VL'})…")
+        # ── Flatten multi-model PDB: keep only first MODEL block ─────────────
+        # pdb_selchain and other pdb-tools don't handle MODEL/ENDMDL wrappers
+        # correctly in a pipeline, so strip them before any processing.
+        flat_lines: list[str] = []
+        seen_model = False
+        for line in antibody_pdb.splitlines():
+            if line.startswith("MODEL"):
+                if seen_model:
+                    break  # stop at second model
+                seen_model = True
+                continue  # drop the MODEL record itself
+            elif line.startswith("ENDMDL"):
+                continue  # drop ENDMDL
+            else:
+                flat_lines.append(line)
+        antibody_flat = "\n".join(flat_lines) + "\n"
+        open(os.path.join(d, "antibody_raw.pdb"), "w").write(antibody_flat)
+
+        # ── Auto-detect chain IDs ─────────────────────────────────────────────
+        actual_chains = sorted({line[21] for line in flat_lines if line.startswith("ATOM")})
+        if actual_chains and vh not in actual_chains:
+            if len(actual_chains) == 1:
+                _progress(
+                    f"WARN: vh_chain='{vh}' not found in antibody PDB "
+                    f"(only chain '{actual_chains[0]}'). Running as single-chain mode."
+                )
+                vh = actual_chains[0]
+                vl = ""
+                nanobody = True
+            elif len(actual_chains) >= 2:
+                _progress(
+                    f"WARN: vh_chain='{vh}' not found. "
+                    f"Auto-assigning VH='{actual_chains[0]}', VL='{actual_chains[1]}'."
+                )
+                vh = actual_chains[0]
+                vl = actual_chains[1]
+                nanobody = False
+
+        _progress(f"Cleaning antibody ({'nanobody/single-chain' if nanobody else 'VH+VL'})…")
         if nanobody:
             # For nanobody: extract VH-only, keep intermediate before renumbering for CDR detection
             _run(
@@ -363,18 +444,9 @@ def main() -> None:
                 cwd=d, label="clean_antigen"
             )
 
-        _progress("Detecting CDR residues via ANARCI (Chothia scheme)…")
-        _detected = _detect_cdrs_chothia(_vh_for_cdr)
-        if _detected:
-            active_cdr = _detected[0] + _detected[1] + _detected[2]
-        else:
-            # Fall back to user-provided / default positions
-            active_cdr = (
-                list(range(cdr1[0], cdr1[1] + 1))
-                + list(range(cdr2[0], cdr2[1] + 1))
-                + list(range(cdr3[0], cdr3[1] + 1))
-            )
-            _progress(f"Using fallback CDR positions: H1={cdr1}, H2={cdr2}, H3={cdr3}")
+        _progress(f"Detecting CDR residues via ANARCI ({numbering_scheme} scheme)…")
+        _cdr1, _cdr2, _cdr3 = _detect_cdrs(_vh_for_cdr, scheme=numbering_scheme, scfv=nanobody and len(actual_chains) <= 1)
+        active_cdr = _cdr1 + _cdr2 + _cdr3
         _write_act_pass(os.path.join(d, "antibody-cdr.act-pass"),
                         " ".join(map(str, active_cdr)))
         _write_act_pass(os.path.join(d, "antigen-rbm.act-pass"), antigen_active, antigen_passive)

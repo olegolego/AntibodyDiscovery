@@ -41,7 +41,9 @@ def _to_pdb(outputs) -> str:
     pred_pos  = final_atom_positions[0]
     mask      = _np("atom37_atom_exists")[0]
     resid     = _np("residue_index")[0].astype(int) + 1
-    b_factors = np.repeat(_np("plddt")[0][..., None], 37, axis=-1)
+    _plddt = _np("plddt")[0]
+    # transformers 4.47 returns plddt as (n_res, 37) per-atom; older versions return (n_res,)
+    b_factors = _plddt if _plddt.ndim == 2 else np.repeat(_plddt[..., None], 37, axis=-1)
     chain_idx = _np("chain_index")[0] if "chain_index" in outputs else np.zeros(len(aa), dtype=int)
 
     protein = OFProtein(

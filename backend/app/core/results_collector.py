@@ -263,7 +263,70 @@ async def _collect_gromacs_mmpbsa(
 
 _STRUCTURE_TOOLS = {"immunebuilder", "esmfold", "alphafold_monomer", "equifold"}
 _DESIGN_TOOLS    = {"proteinmpnn", "rfdiffusion", "biophi"}
-_EMBEDDING_TOOLS = {"abmap", "ablang"}
+_EMBEDDING_TOOLS = {"abmap", "ablang", "esm_embedding", "cheap_embedding"}
+
+_MAX_VARIANT_HANDLES = 10
+
+
+async def _collect_cdr_mutator(
+    run: Run, node_id: str, inputs: dict, outputs: dict, source_molecule_id: str | None
+) -> None:
+    """Register each CDR Mutator variant as its own MoleculeRow.
+
+    - The original input molecule is linked via a DesignSequenceRow so the
+      Results page can show "N variants generated from EVQLV…WGQGT".
+    - Each variant (variant_1 … variant_10) that is non-null gets its own
+      MoleculeRow, pre-named with its strategy + CDR label, so they appear as
+      distinct entries in the results database rather than collapsing onto the
+      parent sequence.
+    """
+    summary  = outputs.get("summary") or {}
+    strategy = summary.get("strategy", "?")
+    cdrs     = "+".join(summary.get("cdr_regions_targeted") or []) or "?"
+
+    variant_heavy_chains: list[str] = []
+
+    for i in range(1, _MAX_VARIANT_HANDLES + 1):
+        bundle = outputs.get(f"variant_{i}")
+        if not bundle or not isinstance(bundle, dict):
+            continue
+
+        vh = str(bundle.get("heavy_chain") or "").strip()
+        vl = str(bundle.get("light_chain") or "").strip()
+        if not vh:
+            continue
+
+        # Register the variant as a molecule with a descriptive name
+        variant_mol_id = await _get_or_create_molecule(run, {"heavy_chain": vh, "light_chain": vl})
+
+        # Annotate the name to flag it as a CDR mutant (only on first creation)
+        if variant_mol_id:
+            async with AsyncSessionLocal() as db:
+                mol = (await db.execute(
+                    select(MoleculeRow).where(MoleculeRow.id == variant_mol_id)
+                )).scalar_one_or_none()
+                if mol and not mol.name.startswith("mut:"):
+                    mol.name = f"mut:{strategy}:{cdrs}:{i} {mol.name}"
+                    await db.commit()
+
+        variant_heavy_chains.append(vh)
+
+    # Record all variant heavy chains as a DesignSequenceRow on the source molecule
+    if source_molecule_id and variant_heavy_chains:
+        async with AsyncSessionLocal() as db:
+            db.add(DesignSequenceRow(
+                molecule_id=source_molecule_id,
+                run_id=run.id,
+                node_id=node_id,
+                tool_id="cdr_mutator",
+                sequences=json.dumps(variant_heavy_chains),
+                scores=json.dumps({
+                    "strategy": strategy,
+                    "cdr_regions": cdrs,
+                    "num_variants": len(variant_heavy_chains),
+                }),
+            ))
+            await db.commit()
 
 
 async def collect(
@@ -288,6 +351,8 @@ async def collect(
 
         if tool_id in ("sequence_input", "sequence_db"):
             await _collect_sequence_input(run, node_id, inputs, outputs)
+        elif tool_id == "cdr_mutator":
+            await _collect_cdr_mutator(run, node_id, inputs, outputs, molecule_id)
         elif tool_id in _STRUCTURE_TOOLS:
             await _collect_structure(run, node_id, tool_id, inputs, outputs, molecule_id)
         elif tool_id in ("haddock3", "equidock", "megadock"):

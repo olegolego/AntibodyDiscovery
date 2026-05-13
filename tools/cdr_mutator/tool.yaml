@@ -1,0 +1,172 @@
+id: cdr_mutator
+name: CDR Mutator
+version: "1.2.0"
+category: mutagenesis
+description: >
+  Generate antibody CDR variant libraries using five mutation strategies:
+  random (uniform AA substitution), BLOSUM62-guided (biochemically weighted),
+  conservative (within property groups), Sapiens LM-guided (human antibody
+  distribution), and saturation (all single-point mutations). Each variant_N
+  output bundles heavy_chain + light_chain and can be wired directly to
+  ImmuneBuilder, AbMAP, BioPhi, or any downstream node. Runs in <10 s on CPU.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: false
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS"
+    description: "VH sequence (single-letter AA, no FASTA header)."
+
+  - name: light_chain
+    type: fasta
+    required: false
+    default: "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+    description: "VL sequence. Optional — omit for VHH/nanobody-only runs."
+
+  - name: strategy
+    type: str
+    required: false
+    default: "blosum62"
+    options:
+      - random
+      - blosum62
+      - conservative
+      - sapiens
+      - saturation
+    description: >
+      Mutation strategy.
+      random: uniform random AA substitution at selected CDR positions.
+      blosum62: substitutions weighted by BLOSUM62 scores — favours biochemically
+        similar AAs while still sampling rarer swaps.
+      conservative: substitutes only within biochemically similar groups
+        (acidic↔acidic, aromatic↔aromatic, aliphatic↔aliphatic, etc.).
+      sapiens: guided by the Sapiens BioPhi language model — samples from the
+        per-position human antibody AA distribution.
+      saturation: enumerates all 19 single-point substitutions at every selected
+        CDR position (num_mutations / num_variants are ignored).
+
+  - name: cdr_h1
+    type: bool
+    required: false
+    default: true
+    description: "Mutate CDR-H1 (heavy chain loop 1)."
+
+  - name: cdr_h2
+    type: bool
+    required: false
+    default: true
+    description: "Mutate CDR-H2 (heavy chain loop 2)."
+
+  - name: cdr_h3
+    type: bool
+    required: false
+    default: true
+    description: "Mutate CDR-H3 (heavy chain loop 3 — typically longest, highest diversity)."
+
+  - name: cdr_l1
+    type: bool
+    required: false
+    default: false
+    description: "Mutate CDR-L1 (light chain loop 1)."
+
+  - name: cdr_l2
+    type: bool
+    required: false
+    default: false
+    description: "Mutate CDR-L2 (light chain loop 2)."
+
+  - name: cdr_l3
+    type: bool
+    required: false
+    default: false
+    description: "Mutate CDR-L3 (light chain loop 3)."
+
+  - name: num_mutations
+    type: int
+    required: false
+    default: 3
+    description: "Point mutations per variant (ignored for saturation strategy)."
+
+  - name: num_variants
+    type: int
+    required: false
+    default: 4
+    description: >
+      Number of variants to generate (1–10 for direct canvas wiring; ignored for saturation).
+      Variants 1–10 each get a dedicated output handle on the node.
+
+  - name: scheme
+    type: str
+    required: false
+    default: "imgt"
+    options:
+      - imgt
+      - kabat
+      - chothia
+    description: "Antibody numbering scheme used to define CDR loop boundaries."
+
+  - name: seed
+    type: int
+    required: false
+    default: 42
+    description: "Random seed for reproducibility (ignored for saturation strategy)."
+
+outputs:
+  # ── Per-variant bundle outputs (wire directly to ImmuneBuilder, AbMAP, etc.) ──
+  - name: variant_1
+    type: json
+    description: "Variant 1 — {heavy_chain, light_chain} bundle. Wire to any downstream node."
+  - name: variant_2
+    type: json
+    description: "Variant 2 — {heavy_chain, light_chain} bundle."
+  - name: variant_3
+    type: json
+    description: "Variant 3 — {heavy_chain, light_chain} bundle."
+  - name: variant_4
+    type: json
+    description: "Variant 4 — {heavy_chain, light_chain} bundle."
+  - name: variant_5
+    type: json
+    description: "Variant 5 — {heavy_chain, light_chain} bundle."
+  - name: variant_6
+    type: json
+    description: "Variant 6 — {heavy_chain, light_chain} bundle."
+  - name: variant_7
+    type: json
+    description: "Variant 7 — {heavy_chain, light_chain} bundle."
+  - name: variant_8
+    type: json
+    description: "Variant 8 — {heavy_chain, light_chain} bundle."
+  - name: variant_9
+    type: json
+    description: "Variant 9 — {heavy_chain, light_chain} bundle."
+  - name: variant_10
+    type: json
+    description: "Variant 10 — {heavy_chain, light_chain} bundle."
+
+  # ── Single-sequence convenience outputs ────────────────────────────────────
+  - name: heavy_chain
+    type: fasta
+    description: "First heavy chain variant (alias of variant_1 heavy_chain)."
+  - name: light_chain
+    type: fasta
+    description: "First light chain variant (alias of variant_1 light_chain)."
+
+  # ── Full library outputs ────────────────────────────────────────────────────
+  - name: heavy_chain_variants
+    type: json
+    description: "All generated heavy chain variant sequences (list of strings)."
+  - name: light_chain_variants
+    type: json
+    description: "All generated light chain variant sequences (list of strings)."
+  - name: mutation_report
+    type: json
+    description: "Per-variant mutation details: position (1-based), original AA, mutant AA, CDR region."
+  - name: summary
+    type: json
+    description: "Run summary: strategy, CDRs targeted, variant count, scheme, seed."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 120

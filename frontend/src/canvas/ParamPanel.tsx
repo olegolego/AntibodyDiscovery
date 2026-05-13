@@ -161,7 +161,19 @@ export function ParamPanel() {
                   <p className="text-[11px] text-slate-600 pl-3">{port.description}</p>
                 )}
 
-                {inputType === "checkbox" ? (
+                {port.options ? (
+                  <select
+                    value={String(value)}
+                    onChange={(e) => handleChange(port.name, e.target.value)}
+                    className="bg-canvas border border-border rounded-lg px-3 py-2 text-sm
+                      text-slate-200 focus:outline-none focus:border-indigo-500/60
+                      transition-colors w-full cursor-pointer"
+                  >
+                    {port.options.map((opt) => (
+                      <option key={opt} value={opt} className="bg-surface2">{opt}</option>
+                    ))}
+                  </select>
+                ) : inputType === "checkbox" ? (
                   <input
                     type="checkbox"
                     checked={Boolean(value)}

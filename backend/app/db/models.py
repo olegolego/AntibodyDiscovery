@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, String, Text
+from sqlalchemy import DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -26,6 +26,8 @@ class RunRow(Base):
     pipeline_id: Mapped[str] = mapped_column(String(36), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
     data: Mapped[str] = mapped_column(Text, nullable=False)
+    loop_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    iteration: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -247,3 +249,56 @@ class DatasetEntryRow(Base):
     data:               Mapped[str]      = mapped_column(Text, nullable=False, default="{}")  # JSON {col_id: value}
     created_at:         Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at:         Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# ── Tool Workshop ──────────────────────────────────────────────────────────────
+
+class CustomToolRow(Base):
+    """A user-authored tool (draft or published) created in the Workshop."""
+    __tablename__ = "custom_tools"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    tool_yaml: Mapped[str] = mapped_column(Text, nullable=False)
+    run_py: Mapped[str] = mapped_column(Text, nullable=False)
+    requirements: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")  # draft | published
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class BenchmarkRow(Base):
+    """A benchmark definition linking a dataset to an expected-output column and metric."""
+    __tablename__ = "benchmarks"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dataset_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    input_columns: Mapped[str] = mapped_column(Text, nullable=False)           # JSON list of col names
+    expected_column: Mapped[str] = mapped_column(String(255), nullable=False)  # ground-truth col
+    metric: Mapped[str] = mapped_column(String(64), nullable=False)            # rmsd | sequence_recovery | pearson | custom
+    metric_fn: Mapped[str | None] = mapped_column(Text, nullable=True)         # Python code for custom metric
+    pass_threshold: Mapped[str | None] = mapped_column(Text, nullable=True)    # JSON float
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class LoopRunRow(Base):
+    """Coordinator for a multi-iteration loop run. Each iteration is a regular RunRow."""
+    __tablename__ = "loop_runs"
+
+    id:                Mapped[str]      = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    pipeline_id:       Mapped[str]      = mapped_column(String(36), nullable=False)
+    pipeline_snapshot: Mapped[str]      = mapped_column(Text, nullable=False)   # JSON
+    max_iterations:    Mapped[int]      = mapped_column(Integer, nullable=False)
+    current_iteration: Mapped[int]      = mapped_column(Integer, default=0)
+    status:            Mapped[str]      = mapped_column(String(32), default="running")
+    stop_reason:       Mapped[str|None] = mapped_column(String(64), nullable=True)
+    run_ids:           Mapped[str]      = mapped_column(Text, default="[]")     # JSON list of run UUIDs
+    loop_history:      Mapped[str]      = mapped_column(Text, default="[]")     # JSON list of history dicts
+    created_at:        Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at:        Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

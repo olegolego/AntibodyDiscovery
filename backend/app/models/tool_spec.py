@@ -18,6 +18,7 @@ class PortSpec(BaseModel):
     default: Any = None
     default_file: str | None = None  # path relative to backend/ dir; content loaded at registry startup
     description: str = ""
+    options: list[str] | None = None  # if set, render as a dropdown
 
 
 class RuntimeSpec(BaseModel):

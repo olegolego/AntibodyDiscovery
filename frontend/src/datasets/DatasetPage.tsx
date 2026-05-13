@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -11,6 +11,7 @@ import {
   List,
   Pencil,
   Plus,
+  Search,
   Trash2,
   Type,
   Upload,
@@ -219,9 +220,23 @@ type BuiltinKey = "name" | "heavy_chain" | "light_chain";
 
 function detectBuiltin(h: string): BuiltinKey | null {
   const l = h.toLowerCase().trim();
-  if (l === "name") return "name";
-  if (l === "vh" || l === "heavy_chain" || l === "heavy chain" || l === "heavy") return "heavy_chain";
-  if (l === "vl" || l === "light_chain" || l === "light chain" || l === "light") return "light_chain";
+  if (l === "name" || l === "ab_name" || l === "antibody_name" || l === "clone") return "name";
+  if (
+    l === "vh" || l === "vh_sequence" || l === "vh sequence" || l === "vh_seq" ||
+    l === "heavy_chain" || l === "heavy chain" || l === "heavy" ||
+    l === "hc" || l === "hc_sequence" || l === "h_sequence" ||
+    l.startsWith("vh_") || l.startsWith("heavy_") ||
+    l.includes("heavy chain") || l.includes("heavy_chain") ||
+    (l.includes("vh") && l.includes("seq"))
+  ) return "heavy_chain";
+  if (
+    l === "vl" || l === "vl_sequence" || l === "vl sequence" || l === "vl_seq" ||
+    l === "light_chain" || l === "light chain" || l === "light" ||
+    l === "lc" || l === "lc_sequence" || l === "l_sequence" ||
+    l.startsWith("vl_") || l.startsWith("light_") ||
+    l.includes("light chain") || l.includes("light_chain") ||
+    (l.includes("vl") && l.includes("seq"))
+  ) return "light_chain";
   return null;
 }
 
@@ -253,27 +268,38 @@ function CsvImportModal({ existingDs, onClose, onDone }: CsvImportProps) {
   const [dsName, setDsName] = useState(existingDs?.name ?? "");
   const [importing, setImporting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // User-controlled mapping of builtin fields to column names (empty string = skip)
+  const [mapping, setMapping] = useState<Record<BuiltinKey, string>>({
+    name: "", heavy_chain: "", light_chain: "",
+  });
 
-  // Auto-infer column defs from headers + sample values
-  const inferredCols: ColumnDef[] = headers
-    .map((h, idx) => ({ h, idx }))
-    .filter(({ h }) => !detectBuiltin(h))
-    .map(({ h, idx }) => ({
-      id: randomUUID(),
-      name: h,
-      type: inferColType(h, allRows.map((r) => r[idx] ?? "")),
-    }));
+  // Stable UUIDs per column header across renders
+  const colIdsRef = useRef<Record<string, string>>({});
+  function getColId(h: string) {
+    if (!colIdsRef.current[h]) colIdsRef.current[h] = randomUUID();
+    return colIdsRef.current[h];
+  }
 
-  // Pre-computed per-header: which builtin or which custom col id
+  // Custom columns: every header not assigned to a builtin
+  const assignedHeaders = new Set(Object.values(mapping).filter(Boolean));
+  const customHeaders = headers.filter((h) => !assignedHeaders.has(h));
+
+  const inferredCols: ColumnDef[] = customHeaders.map((h) => ({
+    id: getColId(h),
+    name: h,
+    type: inferColType(h, allRows.map((r) => r[headers.indexOf(h)] ?? "")),
+  }));
+
+  // colMap: header → builtin key or custom col id
   const colMap: Record<string, BuiltinKey | string> = {};
-  (() => {
-    let customIdx = 0;
-    headers.forEach((h) => {
-      const b = detectBuiltin(h);
-      if (b) { colMap[h] = b; }
-      else { colMap[h] = inferredCols[customIdx++]?.id ?? "__skip__"; }
-    });
-  })();
+  headers.forEach((h) => {
+    const builtin = (Object.entries(mapping) as [BuiltinKey, string][]).find(([, v]) => v === h)?.[0];
+    if (builtin) {
+      colMap[h] = builtin;
+    } else {
+      colMap[h] = inferredCols.find((c) => c.name === h)?.id ?? "__skip__";
+    }
+  });
 
   function loadFile(file: File) {
     if (!file.name.endsWith(".csv") && file.type !== "text/csv") return;
@@ -281,9 +307,17 @@ function CsvImportModal({ existingDs, onClose, onDone }: CsvImportProps) {
     const reader = new FileReader();
     reader.onload = (ev) => {
       const { headers: h, rows } = parseCsvText(ev.target?.result as string);
+      colIdsRef.current = {};  // reset so new file gets fresh column IDs
       setHeaders(h);
       setAllRows(rows);
       setPreviewRows(rows.slice(0, 4));
+      // Auto-detect builtins for initial mapping — user can override via dropdowns
+      const auto: Record<BuiltinKey, string> = { name: "", heavy_chain: "", light_chain: "" };
+      h.forEach((hdr) => {
+        const b = detectBuiltin(hdr);
+        if (b && !auto[b]) auto[b] = hdr;
+      });
+      setMapping(auto);
     };
     reader.readAsText(file);
   }
@@ -309,36 +343,28 @@ function CsvImportModal({ existingDs, onClose, onDone }: CsvImportProps) {
       let existingColIds = new Set((existingDs?.columns ?? []).map((c) => c.id));
 
       if (!existingDs) {
-        // Create brand-new dataset with inferred columns
         const created = await createDataset(dsName.trim(), undefined, inferredCols);
         targetId = created.id;
         existingColIds = new Set(inferredCols.map((c) => c.id));
       } else {
-        // Merge new columns into existing dataset
         const newCols = inferredCols.filter((c) => {
-          const alreadyExists = existingDs.columns.some(
-            (ec) => ec.name.toLowerCase() === c.name.toLowerCase(),
-          );
-          return !alreadyExists;
+          return !existingDs.columns.some((ec) => ec.name.toLowerCase() === c.name.toLowerCase());
         });
         if (newCols.length) {
           await updateDataset(existingDs.id, { columns: [...existingDs.columns, ...newCols] });
           newCols.forEach((c) => existingColIds.add(c.id));
         }
-        // Remap inferred col ids to existing cols by name
         inferredCols.forEach((ic) => {
           const existing = existingDs.columns.find(
             (ec) => ec.name.toLowerCase() === ic.name.toLowerCase(),
           );
           if (existing) {
-            // update colMap to use existing id
-            const h = headers.find((hh) => !detectBuiltin(hh) && hh === ic.name);
+            const h = headers.find((hh) => !assignedHeaders.has(hh) && hh === ic.name);
             if (h) colMap[h] = existing.id;
           }
         });
       }
 
-      // Build entries
       const entries = allRows
         .filter((r) => r.some(Boolean))
         .map((row) => {
@@ -346,7 +372,7 @@ function CsvImportModal({ existingDs, onClose, onDone }: CsvImportProps) {
           headers.forEach((h, i) => {
             const target = colMap[h];
             const val = row[i] ?? "";
-            if (!val) return;
+            if (!val || target === "__skip__") return;
             if (target === "name") entry.name = val;
             else if (target === "heavy_chain") entry.heavy_chain = val;
             else if (target === "light_chain") entry.light_chain = val;
@@ -363,8 +389,6 @@ function CsvImportModal({ existingDs, onClose, onDone }: CsvImportProps) {
   }
 
   const hasFile = headers.length > 0;
-  const builtinCols = headers.filter((h) => detectBuiltin(h));
-  const customCols = headers.filter((h) => !detectBuiltin(h));
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -427,30 +451,55 @@ function CsvImportModal({ existingDs, onClose, onDone }: CsvImportProps) {
                 </div>
               )}
 
-              {/* Detected columns summary */}
+              {/* Sequence column mapping */}
               <div>
                 <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
-                  Detected columns
+                  Sequence columns
                 </p>
-                <div className="flex flex-wrap gap-1.5">
-                  {builtinCols.map((h) => (
-                    <span key={h} className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs
-                      bg-amber-500/10 border border-amber-500/20 text-amber-300">
-                      {detectBuiltin(h) === "heavy_chain" ? "VH" : detectBuiltin(h) === "light_chain" ? "VL" : "Name"}
-                    </span>
+                <div className="grid grid-cols-3 gap-3">
+                  {([
+                    { key: "name" as BuiltinKey, label: "Name" },
+                    { key: "heavy_chain" as BuiltinKey, label: "VH (heavy)" },
+                    { key: "light_chain" as BuiltinKey, label: "VL (light)" },
+                  ]).map(({ key, label }) => (
+                    <div key={key}>
+                      <label className="text-[10px] text-slate-500 block mb-1">{label}</label>
+                      <select
+                        value={mapping[key]}
+                        onChange={(e) => setMapping((m) => ({ ...m, [key]: e.target.value }))}
+                        className="w-full bg-[#0e1425] border border-[#2a3555] rounded-lg px-2 py-1.5
+                          text-xs text-white focus:outline-none focus:border-indigo-500 cursor-pointer"
+                      >
+                        <option value="">— skip</option>
+                        {headers.map((h) => (
+                          <option key={h} value={h}>{h}</option>
+                        ))}
+                      </select>
+                    </div>
                   ))}
-                  {customCols.map((h) => {
-                    const col = inferredCols.find((c) => c.name === h);
-                    return (
-                      <span key={h} className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs
-                        bg-indigo-500/10 border border-indigo-500/20 text-indigo-300">
-                        {COL_TYPE_ICONS[col?.type ?? "text"]}
-                        {h}
-                      </span>
-                    );
-                  })}
                 </div>
               </div>
+
+              {/* Custom columns summary */}
+              {customHeaders.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+                    Custom columns
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {customHeaders.map((h) => {
+                      const col = inferredCols.find((c) => c.name === h);
+                      return (
+                        <span key={h} className="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs
+                          bg-indigo-500/10 border border-indigo-500/20 text-indigo-300">
+                          {COL_TYPE_ICONS[col?.type ?? "text"]}
+                          {h}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               {/* Preview table */}
               {previewRows.length > 0 && (
@@ -463,8 +512,15 @@ function CsvImportModal({ existingDs, onClose, onDone }: CsvImportProps) {
                       <thead>
                         <tr className="bg-[#0e1425]">
                           {headers.map((h) => (
-                            <th key={h} className="px-3 py-1.5 text-left text-slate-500 font-medium whitespace-nowrap">
+                            <th key={h} className="px-3 py-1.5 text-left font-medium whitespace-nowrap"
+                              style={{ color: assignedHeaders.has(h) ? "#fbbf24" : "#64748b" }}>
                               {h}
+                              {assignedHeaders.has(h) && (
+                                <span className="ml-1 text-[9px] text-amber-600">
+                                  ({(Object.entries(mapping) as [BuiltinKey, string][]).find(([,v]) => v === h)?.[0] === "heavy_chain" ? "VH" :
+                                    (Object.entries(mapping) as [BuiltinKey, string][]).find(([,v]) => v === h)?.[0] === "light_chain" ? "VL" : "name"})
+                                </span>
+                              )}
                             </th>
                           ))}
                         </tr>
@@ -690,24 +746,42 @@ function Cell({ value, col, onSave, mono }: CellProps) {
 
 // ── Spreadsheet grid ──────────────────────────────────────────────────────────
 
+const PAGE_SIZE = 100;
+
 interface SheetProps {
-  ds: DatasetDetail;
-  onUpdateCols: (cols: ColumnDef[]) => void;
+  dsId: string;
 }
 
-function DatasetSheet({ ds, onUpdateCols }: SheetProps) {
+function DatasetSheet({ dsId }: SheetProps) {
   const [editingCol, setEditingCol] = useState<ColumnDef | null | "new">(null);
   const [addingRow, setAddingRow] = useState(false);
   const [csvModal, setCsvModal] = useState(false);
   const [savingEntry, setSavingEntry] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [offset, setOffset] = useState(0);
+
+  // Debounce search input
+  useEffect(() => {
+    const t = setTimeout(() => { setSearch(searchInput); setOffset(0); }, 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   const qc = useQueryClient();
+
+  const { data: ds, isLoading } = useQuery({
+    queryKey: ["dataset", dsId, search, offset],
+    queryFn: () => getDataset(dsId, { q: search, limit: PAGE_SIZE, offset }),
+    enabled: !!dsId,
+    staleTime: 10_000,
+  });
 
   async function handleCellSave(
     entry: DatasetEntry,
     field: "name" | "heavy_chain" | "light_chain" | string,
     val: string,
   ) {
+    if (!ds) return;
     setSavingEntry(entry.id);
     try {
       if (field === "name" || field === "heavy_chain" || field === "light_chain") {
@@ -715,82 +789,140 @@ function DatasetSheet({ ds, onUpdateCols }: SheetProps) {
       } else {
         await updateEntry(ds.id, entry.id, { data: { [field]: val } });
       }
-      qc.invalidateQueries({ queryKey: ["dataset", ds.id] });
+      qc.invalidateQueries({ queryKey: ["dataset", dsId] });
     } finally {
       setSavingEntry(null);
     }
   }
 
   async function handleAddRow() {
+    if (!ds) return;
     setAddingRow(true);
     try {
       await addEntry(ds.id, {});
-      qc.invalidateQueries({ queryKey: ["dataset", ds.id] });
+      qc.invalidateQueries({ queryKey: ["dataset", dsId] });
     } finally {
       setAddingRow(false);
     }
   }
 
   async function handleDeleteRow(entryId: string) {
+    if (!ds) return;
     await deleteEntry(ds.id, entryId);
-    qc.invalidateQueries({ queryKey: ["dataset", ds.id] });
+    qc.invalidateQueries({ queryKey: ["dataset", dsId] });
+  }
+
+  async function handleUpdateCols(cols: ColumnDef[]) {
+    if (!ds) return;
+    await updateDataset(ds.id, { columns: cols });
+    qc.invalidateQueries({ queryKey: ["datasets"] });
+    qc.invalidateQueries({ queryKey: ["dataset", dsId] });
   }
 
   function handleColSave(col: ColumnDef) {
-    const cols = ds.columns;
     if (editingCol === "new") {
-      onUpdateCols([...cols, col]);
+      handleUpdateCols([...columns, col]);
     } else {
-      onUpdateCols(cols.map((c) => (c.id === col.id ? col : c)));
+      handleUpdateCols(columns.map((c) => (c.id === col.id ? col : c)));
     }
     setEditingCol(null);
   }
 
   async function handleDeleteCol(colId: string) {
-    const col = ds.columns.find((c) => c.id === colId);
+    const col = columns.find((c) => c.id === colId);
     if (!window.confirm(`Delete column "${col?.name ?? colId}" and all its data? This cannot be undone.`)) return;
-    onUpdateCols(ds.columns.filter((c) => c.id !== colId));
+    handleUpdateCols(columns.filter((c) => c.id !== colId));
   }
 
-  const exportUrl = `/api/datasets/${ds.id}/export.csv`;
+  const entries = ds?.entries ?? [];
+  const totalFiltered = ds?.total_filtered ?? 0;
+  const totalAll = ds?.entry_count ?? 0;
+  const columns = ds?.columns ?? [];
 
   // Only show a built-in column when at least one entry has data for it.
-  // For empty datasets show all three so the user can start filling them in.
-  const noEntries = ds.entries.length === 0;
-  const showName  = noEntries || ds.entries.some((e) => e.name);
-  const showVH    = noEntries || ds.entries.some((e) => e.heavy_chain);
-  const showVL    = noEntries || ds.entries.some((e) => e.light_chain);
+  const noEntries = totalAll === 0;
+  const showName  = noEntries || entries.some((e) => e.name);
+  const showVH    = noEntries || entries.some((e) => e.heavy_chain);
+  const showVL    = noEntries || entries.some((e) => e.light_chain);
   const builtinCount = [showName, showVH, showVL].filter(Boolean).length;
+
+  const showingStart = offset + 1;
+  const showingEnd = offset + entries.length;
+  const hasMore = offset + entries.length < totalFiltered;
+  const isLarge = totalAll > PAGE_SIZE;
+  const exportUrl = ds ? `/api/datasets/${ds.id}/export.csv` : "#";
+
+  if (isLoading && !ds) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-slate-600 text-sm">
+        Loading…
+      </div>
+    );
+  }
+
+  if (!ds) return null;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Dataset header */}
-      <div className="px-6 pt-5 pb-4 border-b border-[#1e2d4a] flex items-start justify-between gap-4 shrink-0">
-        <div className="min-w-0">
-          <EditableTitle ds={ds} />
-          <EditableDescription ds={ds} />
+      <div className="px-6 pt-5 pb-3 border-b border-[#1e2d4a] flex flex-col gap-3 shrink-0">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <EditableTitle ds={ds} />
+            <EditableDescription ds={ds} />
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => setCsvModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                text-slate-400 hover:text-white border border-[#2a3555] hover:border-slate-500
+                transition-all"
+            >
+              <Upload size={12} />
+              <span>Import CSV</span>
+            </button>
+            <a
+              href={exportUrl}
+              download
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                text-slate-400 hover:text-white border border-[#2a3555] hover:border-slate-500
+                transition-all"
+            >
+              <Download size={12} />
+              <span>Export CSV</span>
+            </a>
+          </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => setCsvModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-              text-slate-400 hover:text-white border border-[#2a3555] hover:border-slate-500
-              transition-all"
-          >
-            <Upload size={12} />
-            <span>Import CSV</span>
-          </button>
-          <a
-            href={exportUrl}
-            download
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-              text-slate-400 hover:text-white border border-[#2a3555] hover:border-slate-500
-              transition-all"
-          >
-            <Download size={12} />
-            <span>Export CSV</span>
-          </a>
-        </div>
+
+        {/* Search bar — only shown for large datasets */}
+        {isLarge && (
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1 max-w-sm">
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
+              <input
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Search name, VH, VL…"
+                className="w-full bg-[#0e1425] border border-[#2a3555] rounded-lg pl-8 pr-3 py-1.5
+                  text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500"
+              />
+              {searchInput && (
+                <button
+                  onClick={() => setSearchInput("")}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+            <span className="text-xs text-slate-500 whitespace-nowrap">
+              {search
+                ? `${totalFiltered.toLocaleString()} match${totalFiltered !== 1 ? "es" : ""} · showing ${showingStart}–${showingEnd}`
+                : `Showing ${showingStart}–${showingEnd} of ${totalAll.toLocaleString()}`
+              }
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Table */}
@@ -813,8 +945,8 @@ function DatasetSheet({ ds, onUpdateCols }: SheetProps) {
               )}
 
               {/* User-defined cols */}
-              {ds.columns.map((col) => {
-                const pct = completeness(ds.entries, col.id);
+              {columns.map((col) => {
+                const pct = completeness(entries, col.id);
                 return (
                   <th
                     key={col.id}
@@ -843,7 +975,7 @@ function DatasetSheet({ ds, onUpdateCols }: SheetProps) {
                       </div>
                     </div>
                     {/* Completeness bar */}
-                    {ds.entries.length > 0 && (
+                    {entries.length > 0 && (
                       <div className="mt-1 flex items-center gap-1.5">
                         <div className="flex-1 h-0.5 bg-[#1e2d4a] rounded-full overflow-hidden">
                           <div
@@ -883,7 +1015,7 @@ function DatasetSheet({ ds, onUpdateCols }: SheetProps) {
           </thead>
 
           <tbody>
-            {ds.entries.map((entry) => (
+            {entries.map((entry) => (
               <tr
                 key={entry.id}
                 className={`border-b border-[#1a2540] hover:bg-white/[0.02] transition-colors group
@@ -909,7 +1041,7 @@ function DatasetSheet({ ds, onUpdateCols }: SheetProps) {
                     mono
                   />
                 )}
-                {ds.columns.map((col) => (
+                {columns.map((col) => (
                   <Cell
                     key={col.id}
                     value={String(entry.data[col.id] ?? "")}
@@ -933,13 +1065,16 @@ function DatasetSheet({ ds, onUpdateCols }: SheetProps) {
             ))}
 
             {/* Empty state */}
-            {ds.entries.length === 0 && (
+            {entries.length === 0 && (
               <tr>
                 <td
-                  colSpan={builtinCount + ds.columns.length + 2}
+                  colSpan={builtinCount + columns.length + 2}
                   className="px-6 py-16 text-center text-sm text-slate-600"
                 >
-                  No rows yet — click <strong className="text-slate-500">+ Add row</strong> or import a CSV
+                  {search
+                    ? `No rows match "${search}"`
+                    : <>No rows yet — click <strong className="text-slate-500">+ Add row</strong> or import a CSV</>
+                  }
                 </td>
               </tr>
             )}
@@ -947,8 +1082,8 @@ function DatasetSheet({ ds, onUpdateCols }: SheetProps) {
         </table>
       </div>
 
-      {/* Add row footer */}
-      <div className="px-4 py-2.5 border-t border-[#1e2d4a] shrink-0">
+      {/* Footer: add row + pagination */}
+      <div className="px-4 py-2.5 border-t border-[#1e2d4a] shrink-0 flex items-center gap-3">
         <button
           onClick={handleAddRow}
           disabled={addingRow}
@@ -959,6 +1094,29 @@ function DatasetSheet({ ds, onUpdateCols }: SheetProps) {
           <Plus size={12} />
           <span>{addingRow ? "Adding…" : "Add row"}</span>
         </button>
+
+        {(offset > 0 || hasMore) && (
+          <div className="flex items-center gap-2 ml-auto">
+            {offset > 0 && (
+              <button
+                onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
+                className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white
+                  border border-[#2a3555] hover:border-slate-500 transition-all"
+              >
+                ← Previous
+              </button>
+            )}
+            {hasMore && (
+              <button
+                onClick={() => setOffset(offset + PAGE_SIZE)}
+                className="px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white
+                  border border-[#2a3555] hover:border-slate-500 transition-all"
+              >
+                Next {Math.min(PAGE_SIZE, totalFiltered - offset - entries.length).toLocaleString()} →
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Modals */}
@@ -975,9 +1133,9 @@ function DatasetSheet({ ds, onUpdateCols }: SheetProps) {
         <CsvImportModal
           existingDs={ds}
           onClose={() => setCsvModal(false)}
-          onDone={(dsId) => {
+          onDone={(id) => {
             setCsvModal(false);
-            qc.invalidateQueries({ queryKey: ["dataset", dsId] });
+            qc.invalidateQueries({ queryKey: ["dataset", id] });
           }}
         />
       )}
@@ -1217,20 +1375,8 @@ function DatasetSidebar({ selected, onSelect }: SidebarProps) {
 
 export function DatasetPage({ onBack }: { onBack: () => void }) {
   const [selectedId, setSelectedId] = useState<string>("");
-  const qc = useQueryClient();
-
-  const { data: ds } = useQuery({
-    queryKey: ["dataset", selectedId],
-    queryFn: () => getDataset(selectedId),
-    enabled: !!selectedId,
-  });
-
-  async function handleUpdateCols(cols: ColumnDef[]) {
-    if (!ds) return;
-    await updateDataset(ds.id, { columns: cols });
-    qc.invalidateQueries({ queryKey: ["datasets"] });
-    qc.invalidateQueries({ queryKey: ["dataset", ds.id] });
-  }
+  const { data: datasets } = useQuery({ queryKey: ["datasets"], queryFn: listDatasets });
+  const selectedName = datasets?.find((d) => d.id === selectedId)?.name;
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#0a1120]">
@@ -1248,10 +1394,10 @@ export function DatasetPage({ onBack }: { onBack: () => void }) {
         </button>
         <div className="w-px h-5 bg-[#2a3555] mx-1" />
         <span className="text-sm font-semibold text-white">Datasets</span>
-        {ds && (
+        {selectedName && (
           <>
             <span className="text-slate-600">/</span>
-            <span className="text-sm text-slate-400">{ds.name}</span>
+            <span className="text-sm text-slate-400">{selectedName}</span>
           </>
         )}
       </div>
@@ -1266,18 +1412,8 @@ export function DatasetPage({ onBack }: { onBack: () => void }) {
           </div>
         )}
 
-        {selectedId && !ds && (
-          <div className="flex-1 flex items-center justify-center text-slate-600 text-sm">
-            Loading…
-          </div>
-        )}
-
-        {ds && (
-          <DatasetSheet
-            key={ds.id}
-            ds={ds}
-            onUpdateCols={handleUpdateCols}
-          />
+        {selectedId && (
+          <DatasetSheet key={selectedId} dsId={selectedId} />
         )}
       </div>
     </div>

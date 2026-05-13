@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     proteinmpnn_url: str = "http://localhost:8003"
     esmfold_url: str = "http://localhost:8004"
     abmap_url: str = "http://localhost:8005"
+    cheap_embedding_url: str = "http://localhost:8006"
 
     # Comma-separated list of allowed CORS origins.
     # start.sh sets this dynamically to include the LAN IP.

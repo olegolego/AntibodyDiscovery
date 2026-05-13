@@ -1,0 +1,60 @@
+id: esm_embedding
+name: ESM2 Embedding
+version: "1.0.0"
+category: sequence_embedding
+description: >
+  Meta's ESM2 protein language model — produces high-quality embeddings from
+  amino acid sequences. Trained on 250 M UniRef50 sequences; four sizes available
+  (8 M → 650 M parameters). Outputs a fixed-length sequence vector (mean/CLS pool)
+  or full per-residue embeddings. No GPU required; runs on CPU.
+
+inputs:
+  - name: sequence
+    type: fasta
+    required: true
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAK"
+    description: >
+      Antibody heavy- or light-chain amino acid sequence (single-letter, FASTA or raw).
+
+  - name: model_size
+    type: str
+    required: false
+    default: "650M"
+    options:
+      - "8M"
+      - "35M"
+      - "150M"
+      - "650M"
+    description: >
+      ESM2 model size. 650M (1280-dim) gives the best embeddings; 8M is ~40× faster.
+      Weights are downloaded automatically on first use (~700 MB for 650M).
+
+  - name: pool_mode
+    type: str
+    required: false
+    default: "mean"
+    options:
+      - "mean"
+      - "cls"
+      - "per_residue"
+    description: >
+      Pooling strategy. 'mean' averages all residue embeddings into one vector.
+      'cls' uses the [CLS] token. 'per_residue' returns all residue embeddings.
+
+outputs:
+  - name: embedding
+    type: json
+    description: Sequence-level embedding vector (mean or cls pool).
+
+  - name: res_embeddings
+    type: json
+    description: Per-residue embeddings as a list of lists (per_residue mode only).
+
+  - name: metadata
+    type: json
+    description: Model name, sequence length, embedding dim, output shape.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 300

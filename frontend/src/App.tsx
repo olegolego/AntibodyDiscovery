@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Canvas } from "./canvas/Canvas";
 import { ParamPanel } from "./canvas/ParamPanel";
 import { Palette } from "./palette/Palette";
@@ -8,10 +8,12 @@ import { RunsPage } from "./runs/RunsPage";
 import { RunReport } from "./runs/RunReport";
 import { AnalysisPanel } from "./analysis/AnalysisPanel";
 import { Playground } from "./playground/Playground";
+import { WorkshopPage } from "./workshop/WorkshopPage";
 import { ResultsPage } from "./results/ResultsPage";
 import { DatasetPage } from "./datasets/DatasetPage";
 import { TerminalPage } from "./terminal/TerminalPage";
 import { submitRun } from "./api/runs";
+import { cancelLoopRun, getLoopRun, type LoopRun } from "./api/loopRuns";
 import { useCanvasStore } from "./canvas/store";
 import { useTools } from "./api/tools";
 import { randomUUID } from "./utils";
@@ -33,8 +35,11 @@ export default function App() {
   });
   const [runId, setRunId] = useState<string | null>(() => localStorage.getItem(RUN_KEY));
   const [running, setRunning] = useState(false);
+  const [loopRunId, setLoopRunId] = useState<string | null>(null);
+  const [loopRunning, setLoopRunning] = useState(false);
+  const [loopData, setLoopData] = useState<LoopRun | null>(null);
   const [analysis, setAnalysis] = useState<{ runId: string; nodeId: string } | null>(null);
-  const [page, setPage] = useState<"canvas" | "playground" | "results" | "library" | "terminal" | "runs" | "report">("canvas");
+  const [page, setPage] = useState<"canvas" | "playground" | "workshop" | "results" | "library" | "terminal" | "runs" | "report">("canvas");
   const [reportRunId, setReportRunId] = useState<string | null>(null);
 
   const toPipeline = useCanvasStore((s) => s.toPipeline);
@@ -46,7 +51,13 @@ export default function App() {
   async function handleRun() {
     setRunning(true);
     clearRunStatuses();
-    // Cancel any active run before starting a new one. Idempotent on finished runs.
+    // Cancel any in-progress run or loop before starting fresh
+    if (loopRunId) {
+      cancelLoopRun(loopRunId).catch(() => {});
+      setLoopRunId(null);
+      setLoopData(null);
+      setLoopRunning(false);
+    }
     if (runId) {
       fetch(`/api/runs/${runId}/cancel/`, { method: "POST" }).catch(() => {});
       setRunId(null);
@@ -57,12 +68,43 @@ export default function App() {
       const run = await submitRun(pipeline);
       setRunId(run.id);
       localStorage.setItem(RUN_KEY, run.id);
+      // If the pipeline has a Loop node the backend auto-creates a loop campaign
+      if (run.loop_id) {
+        setLoopRunId(run.loop_id);
+        setLoopRunning(true);
+      }
     } catch (err) {
       console.error("Failed to submit run:", err);
     } finally {
       setRunning(false);
     }
   }
+
+  // Poll loop status and keep runId in sync with the current iteration's run
+  useEffect(() => {
+    if (!loopRunId || !loopRunning) return;
+    const id = setInterval(async () => {
+      try {
+        const loop = await getLoopRun(loopRunId);
+        setLoopData(loop);
+        // Show the latest iteration's run on the canvas
+        if (loop.run_ids.length > 0) {
+          const latestRunId = loop.run_ids[loop.run_ids.length - 1];
+          if (latestRunId !== runId) {
+            setRunId(latestRunId);
+            localStorage.setItem(RUN_KEY, latestRunId);
+          }
+        }
+        if (loop.status !== "running") {
+          setLoopRunning(false);
+          clearInterval(id);
+        }
+      } catch {
+        // ignore transient errors
+      }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [loopRunId, loopRunning]);
 
   if (page === "report" && reportRunId) {
     return (
@@ -112,6 +154,15 @@ export default function App() {
     return <Playground onBack={() => setPage("canvas")} />;
   }
 
+  if (page === "workshop") {
+    return (
+      <WorkshopPage
+        onBack={() => setPage("canvas")}
+        onGoToCanvas={() => setPage("canvas")}
+      />
+    );
+  }
+
   if (page === "results") {
     return (
       <ResultsPage
@@ -140,8 +191,10 @@ return (
         onNameChange={(n) => { setPipelineName(n); localStorage.setItem("pdp_pipeline_name", n); }}
         onRun={handleRun}
         running={running}
+        loopRunning={loopRunning}
         pipelineId={pipelineId}
         onOpenPlayground={() => setPage("playground")}
+        onOpenWorkshop={() => setPage("workshop")}
         onOpenResults={() => setPage("results")}
         onOpenLibrary={() => setPage("library")}
         onOpenTerminal={() => setPage("terminal")}
@@ -162,11 +215,15 @@ return (
 
         {selectedNodeId && <ParamPanel />}
 
-        {runId && (
+        {(runId || loopRunId) && (
           <div className="w-80 shrink-0 border-l border-border bg-surface overflow-hidden flex flex-col">
             <RunPanel
               runId={runId}
-              onClose={() => { setRunId(null); localStorage.removeItem(RUN_KEY); }}
+              loopRunId={loopRunId}
+              loopData={loopData}
+              onSelectIteration={(id) => { setRunId(id); localStorage.setItem(RUN_KEY, id); }}
+              onCancelLoop={() => { if (loopRunId) { cancelLoopRun(loopRunId).catch(() => {}); setLoopRunning(false); } }}
+              onClose={() => { setRunId(null); setLoopRunId(null); setLoopData(null); setLoopRunning(false); localStorage.removeItem(RUN_KEY); }}
               onOpenAnalysis={(rId, nId) => setAnalysis({ runId: rId, nodeId: nId })}
               onViewReport={(id) => { setReportRunId(id); setPage("report"); }}
             />

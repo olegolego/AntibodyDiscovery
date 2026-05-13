@@ -51,6 +51,7 @@ function nodeType(toolId: string): string {
   if (toolId === "haddock3")        return "haddock3Node";
   if (toolId === "equidock")        return "equidockNode";
   if (toolId === "compute")         return "computeNode";
+  if (toolId === "cdr_mutator")     return "cdrMutatorNode";
   return "toolNode";
 }
 
@@ -109,7 +110,10 @@ export const useCanvasStore = create<CanvasState>()(persist((set, get) => ({
       ),
     })),
 
-  selectNode: (id) => set({ selectedNodeId: id }),
+  selectNode: (id) => set((s) => ({
+    selectedNodeId: id,
+    nodes: s.nodes.map((n) => ({ ...n, selected: n.id === id })),
+  })),
 
   updateNodeParams: (id, params) =>
     set((s) => ({

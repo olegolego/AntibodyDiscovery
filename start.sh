@@ -3,8 +3,8 @@
 # Backend and AbMAP are localhost-only; all external traffic goes through the Vite proxy.
 set -e
 
-# Ensure Homebrew tools are in PATH (needed when launched over SSH)
-export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
+# Ensure Homebrew and Claude CLI are in PATH (needed when launched over SSH)
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$HOME/.local/bin:$PATH"
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -40,8 +40,13 @@ export PROTEINMPNN_PORT
 export ESMFOLD_CONDA_ENV
 export ESMFOLD_PORT
 
+# Export CHEAP Embedding settings so tools/cheap_embedding/start.sh picks them up.
+export CHEAP_CONDA_ENV
+export CHEAP_EMBEDDING_PORT
+export CHEAP_EMBEDDING_URL
+
 # Export tool URLs so the backend picks them up from the environment.
-export ABMAP_URL ALPHAFOLD_URL RFDIFFUSION_URL PROTEINMPNN_URL ESMFOLD_URL
+export ABMAP_URL ALPHAFOLD_URL RFDIFFUSION_URL PROTEINMPNN_URL ESMFOLD_URL CHEAP_EMBEDDING_URL
 
 # ── Kill any existing processes on known ports ────────────────────────────────
 echo "Stopping existing processes..."
@@ -49,7 +54,8 @@ lsof -ti:${BACKEND_PORT}      | xargs kill -9 2>/dev/null || true
 lsof -ti:${FRONTEND_PORT}     | xargs kill -9 2>/dev/null || true
 lsof -ti:${ABMAP_PORT}        | xargs kill -9 2>/dev/null || true
 lsof -ti:${PROTEINMPNN_PORT}  | xargs kill -9 2>/dev/null || true
-lsof -ti:${ESMFOLD_PORT}      | xargs kill -9 2>/dev/null || true
+lsof -ti:${ESMFOLD_PORT}          | xargs kill -9 2>/dev/null || true
+lsof -ti:${CHEAP_EMBEDDING_PORT}  | xargs kill -9 2>/dev/null || true
 
 # ── Docker tool services (optional — ESMFold / others) ───────────────────────
 if [ "${START_DOCKER_TOOLS:-0}" = "1" ]; then
@@ -72,6 +78,12 @@ echo "Starting ProteinMPNN server (port ${PROTEINMPNN_PORT})..."
 cd "$REPO_DIR/tools/proteinmpnn"
 bash start.sh > /tmp/proteinmpnn.log 2>&1 &
 PROTEINMPNN_PID=$!
+
+# ── CHEAP Embedding ───────────────────────────────────────────────────────────
+echo "Starting CHEAP Embedding server (port ${CHEAP_EMBEDDING_PORT})..."
+cd "$REPO_DIR/tools/cheap_embedding"
+bash start.sh > /tmp/cheap_embedding.log 2>&1 &
+CHEAP_PID=$!
 
 # ── AbMAP ─────────────────────────────────────────────────────────────────────
 echo "Starting AbMAP server (port ${ABMAP_PORT})..."
@@ -98,13 +110,14 @@ echo "Waiting for servers to start..."
 
 for i in $(seq 1 30); do
   sleep 1
-  BACKEND_OK=0; FRONTEND_OK=0; ABMAP_OK=0; PROTEINMPNN_OK=0; ESMFOLD_OK=0
-  curl -sfL "http://localhost:${BACKEND_PORT}/api/tools/"      > /dev/null 2>&1 && BACKEND_OK=1
-  curl -sf  "http://localhost:${FRONTEND_PORT}"                > /dev/null 2>&1 && FRONTEND_OK=1
-  curl -sf  "http://localhost:${ABMAP_PORT}/health"            > /dev/null 2>&1 && ABMAP_OK=1
-  curl -sf  "http://localhost:${PROTEINMPNN_PORT}/health"      > /dev/null 2>&1 && PROTEINMPNN_OK=1
-  curl -sf  "http://localhost:${ESMFOLD_PORT}/health"          > /dev/null 2>&1 && ESMFOLD_OK=1
-  if [ $BACKEND_OK -eq 1 ] && [ $FRONTEND_OK -eq 1 ] && [ $ABMAP_OK -eq 1 ] && [ $PROTEINMPNN_OK -eq 1 ] && [ $ESMFOLD_OK -eq 1 ]; then
+  BACKEND_OK=0; FRONTEND_OK=0; ABMAP_OK=0; PROTEINMPNN_OK=0; ESMFOLD_OK=0; CHEAP_OK=0
+  curl -sfL "http://localhost:${BACKEND_PORT}/api/tools/"        > /dev/null 2>&1 && BACKEND_OK=1
+  curl -sf  "http://localhost:${FRONTEND_PORT}"                  > /dev/null 2>&1 && FRONTEND_OK=1
+  curl -sf  "http://localhost:${ABMAP_PORT}/health"              > /dev/null 2>&1 && ABMAP_OK=1
+  curl -sf  "http://localhost:${PROTEINMPNN_PORT}/health"        > /dev/null 2>&1 && PROTEINMPNN_OK=1
+  curl -sf  "http://localhost:${ESMFOLD_PORT}/health"            > /dev/null 2>&1 && ESMFOLD_OK=1
+  curl -sf  "http://localhost:${CHEAP_EMBEDDING_PORT}/health"    > /dev/null 2>&1 && CHEAP_OK=1
+  if [ $BACKEND_OK -eq 1 ] && [ $FRONTEND_OK -eq 1 ] && [ $ABMAP_OK -eq 1 ] && [ $PROTEINMPNN_OK -eq 1 ] && [ $ESMFOLD_OK -eq 1 ] && [ $CHEAP_OK -eq 1 ]; then
     break
   fi
 done
@@ -116,17 +129,18 @@ printf "  Frontend     http://%-22s %s\n" "${HOST_IP}:${FRONTEND_PORT}" "$([ $FR
 printf "  AbMAP        http://%-22s %s\n" "localhost:${ABMAP_PORT} (internal)" "$([ $ABMAP_OK -eq 1 ] && echo '✓' || echo '✗ check /tmp/abmap.log')"
 printf "  ProteinMPNN  http://%-22s %s\n" "localhost:${PROTEINMPNN_PORT} (internal)" "$([ $PROTEINMPNN_OK -eq 1 ] && echo '✓' || echo '✗ check /tmp/proteinmpnn.log')"
 printf "  ESMFold      http://%-22s %s\n" "localhost:${ESMFOLD_PORT} (internal)" "$([ $ESMFOLD_OK -eq 1 ] && echo '✓' || echo '✗ check /tmp/esmfold.log')"
+printf "  CHEAP Embed  http://%-22s %s\n" "localhost:${CHEAP_EMBEDDING_PORT} (internal)" "$([ $CHEAP_OK -eq 1 ] && echo '✓' || echo '✗ check /tmp/cheap_embedding.log')"
 echo "═══════════════════════════════════════════════════"
 echo ""
 echo "  Open from this machine:    http://localhost:${FRONTEND_PORT}"
 echo "  Open from other machines:  http://${HOST_IP}:${FRONTEND_PORT}"
 echo ""
-echo "PIDs: backend=$BACKEND_PID  frontend=$FRONTEND_PID  abmap=$ABMAP_PID  proteinmpnn=$PROTEINMPNN_PID  esmfold=$ESMFOLD_PID"
-echo "Logs: /tmp/backend.log  /tmp/frontend.log  /tmp/abmap.log  /tmp/proteinmpnn.log  /tmp/esmfold.log"
+echo "PIDs: backend=$BACKEND_PID  frontend=$FRONTEND_PID  abmap=$ABMAP_PID  proteinmpnn=$PROTEINMPNN_PID  esmfold=$ESMFOLD_PID  cheap=$CHEAP_PID"
+echo "Logs: /tmp/backend.log  /tmp/frontend.log  /tmp/abmap.log  /tmp/proteinmpnn.log  /tmp/esmfold.log  /tmp/cheap_embedding.log"
 echo ""
 echo "Press Ctrl+C to stop all servers."
 
 # ── Keep script alive; kill children on exit ──────────────────────────────────
-trap "echo ''; echo 'Stopping...'; kill $BACKEND_PID $FRONTEND_PID $ABMAP_PID $PROTEINMPNN_PID $ESMFOLD_PID 2>/dev/null; exit 0" INT TERM
+trap "echo ''; echo 'Stopping...'; kill $BACKEND_PID $FRONTEND_PID $ABMAP_PID $PROTEINMPNN_PID $ESMFOLD_PID $CHEAP_PID 2>/dev/null; exit 0" INT TERM
 
 wait

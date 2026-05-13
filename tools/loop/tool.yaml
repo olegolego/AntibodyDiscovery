@@ -1,0 +1,53 @@
+id: loop
+name: Loop
+version: "1.0"
+category: control_flow
+description: >
+  Iterative optimizer. Place at the end of your pipeline.
+  All upstream node outputs are injected as Python variables (prefixed by
+  node-id), along with loop_history (previous iteration scores) and
+  loop_iteration (0-based index).
+  Set next_heavy_chain / next_light_chain to drive the next cycle.
+
+inputs:
+  - name: max_iterations
+    type: int
+    required: false
+    default: 5
+    description: "Total number of pipeline iterations to run"
+  - name: code
+    type: python_code
+    required: true
+    default: |
+      # All upstream outputs are available as <node_id>_<key> variables.
+      # loop_history: list of dicts from previous iterations.
+      # loop_iteration: current 0-based iteration index.
+      #
+      # Example: pick the sequence with the best HADDOCK score.
+
+      if not loop_history:
+          # First iteration — pass through current sequences unchanged
+          next_heavy_chain = heavy_chain if 'heavy_chain' in dir() else None
+          next_light_chain = light_chain if 'light_chain' in dir() else None
+      else:
+          best = min(loop_history, key=lambda r: r.get("haddock_score", 0))
+          next_heavy_chain = best.get("vh", heavy_chain if 'heavy_chain' in dir() else None)
+          next_light_chain = best.get("vl")
+
+      result = {
+          "next_heavy_chain": next_heavy_chain,
+          "next_light_chain": next_light_chain,
+      }
+
+outputs:
+  - name: next_heavy_chain
+    type: string
+    required: false
+  - name: next_light_chain
+    type: string
+    required: false
+
+runtime:
+  kind: local_python
+  timeout_seconds: 120
+  gpu: false

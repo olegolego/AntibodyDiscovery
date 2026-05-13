@@ -51,16 +51,13 @@ class HADDOCK3Adapter:
 
         vh   = str(inputs.get("vh_chain", "H") or "H").upper()
         vl   = str(inputs.get("vl_chain", "L") or "").upper()
-        cdr1 = (int(inputs.get("cdr1_start", 26)), int(inputs.get("cdr1_end", 35)))
-        cdr2 = (int(inputs.get("cdr2_start", 50)), int(inputs.get("cdr2_end", 58)))
-        cdr3 = (int(inputs.get("cdr3_start", 95)), int(inputs.get("cdr3_end", 102)))
+        scheme     = str(inputs.get("numbering_scheme", "chothia")).strip().lower()
         sampling   = max(1, int(inputs.get("rigid_sampling", 100)))
         select_top = max(1, int(inputs.get("select_top", 50)))
 
         await run_ctx.alog(
             f"Mode: {'nanobody' if not vl else 'antibody'} | "
-            f"CDR1 {cdr1[0]}-{cdr1[1]}, CDR2 {cdr2[0]}-{cdr2[1]}, CDR3 {cdr3[0]}-{cdr3[1]} | "
-            f"sampling={sampling}, select_top={select_top}"
+            f"scheme={scheme} | sampling={sampling}, select_top={select_top}"
         )
         await run_ctx.alog("Starting HADDOCK3 via subprocess (tools/haddock3/.venv)… 15–90 min")
 

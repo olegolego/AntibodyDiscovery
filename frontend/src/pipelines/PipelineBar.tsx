@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { BookOpen, ChevronDown, ClipboardList, Database, FilePlus, FlaskConical, FolderOpen, Play, Save, Terminal, Trash2 } from "lucide-react";
+import { BookOpen, ChevronDown, ClipboardList, Database, FilePlus, FlaskConical, FolderOpen, Play, Save, Terminal, Trash2, Wrench } from "lucide-react";
 import { usePipelines, savePipeline, deletePipeline } from "@/api/pipelines";
 import { useCanvasStore } from "@/canvas/store";
 import { useTools } from "@/api/tools";
@@ -12,9 +12,11 @@ interface PipelineBarProps {
   onNameChange: (name: string) => void;
   onRun: () => void;
   running: boolean;
+  loopRunning: boolean;
   pipelineId: string;
   onPipelineIdChange: (id: string) => void;
   onOpenPlayground: () => void;
+  onOpenWorkshop: () => void;
   onOpenResults: () => void;
   onOpenLibrary: () => void;
   onOpenTerminal: () => void;
@@ -30,8 +32,9 @@ function ts(iso: string | undefined): string {
 }
 
 export function PipelineBar({
-  name, onNameChange, onRun, running, pipelineId, onPipelineIdChange,
-  onOpenPlayground, onOpenResults, onOpenLibrary, onOpenTerminal, onOpenRuns, onNewPipeline,
+  name, onNameChange, onRun, running, loopRunning,
+  pipelineId, onPipelineIdChange,
+  onOpenPlayground, onOpenWorkshop, onOpenResults, onOpenLibrary, onOpenTerminal, onOpenRuns, onNewPipeline,
 }: PipelineBarProps) {
   const [showLoad, setShowLoad] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -236,7 +239,18 @@ export function PipelineBar({
           transition-all duration-150"
       >
         <FlaskConical size={13} />
-        <span>Playground</span>
+        <span>Tool Understanding</span>
+      </button>
+
+      {/* Workshop */}
+      <button
+        onClick={onOpenWorkshop}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-slate-400
+          hover:text-white hover:bg-white/5 border border-border hover:border-slate-500
+          transition-all duration-150"
+      >
+        <Wrench size={13} />
+        <span>Workshop</span>
       </button>
 
       {/* Run History */}
@@ -264,13 +278,13 @@ export function PipelineBar({
       {/* Run */}
       <button
         onClick={onRun}
-        disabled={running || nodes.length === 0}
+        disabled={running || loopRunning || nodes.length === 0}
         className="flex items-center gap-2 px-4 py-1.5 rounded-lg text-sm font-semibold
           text-white disabled:opacity-40 transition-all duration-150 shadow-lg
           bg-gradient-to-r from-indigo-600 to-purple-600
           hover:from-indigo-500 hover:to-purple-500
           disabled:cursor-not-allowed"
-        style={{ boxShadow: nodes.length > 0 && !running ? "0 0 16px rgba(99,102,241,0.4)" : undefined }}
+        style={{ boxShadow: nodes.length > 0 && !running && !loopRunning ? "0 0 16px rgba(99,102,241,0.4)" : undefined }}
       >
         <Play size={13} fill="white" />
         <span>{running ? "Running…" : "Run"}</span>

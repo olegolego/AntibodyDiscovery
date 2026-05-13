@@ -14,6 +14,7 @@ const CATEGORY_STYLE: Record<string, { border: string; label: string; glow: stri
   docking:              { border: "#f97316", label: "text-orange-300",  glow: "rgba(249,115,22,0.2)"   },
   toolbox:              { border: "#e879f9", label: "text-fuchsia-300", glow: "rgba(232,121,249,0.2)"  },
   compute:              { border: "#818cf8", label: "text-indigo-300",  glow: "rgba(129,140,248,0.2)"  },
+  mutagenesis:          { border: "#f59e0b", label: "text-amber-300",   glow: "rgba(245,158,11,0.25)"  },
   debug:                { border: "#94a3b8", label: "text-slate-400",   glow: "rgba(148,163,184,0.15)" },
 };
 
@@ -788,6 +789,138 @@ export function TargetInputNode({ id, data, selected }: NodeProps<NodeData>) {
         title="target: pdb"
         className="!w-3 !h-3 !border-2 !border-surface"
       />
+    </div>
+  );
+}
+
+// ── CDR Mutator node — N variant bundle output handles ───────────────────────
+
+const _CDR_STRATEGY_LABEL: Record<string, string> = {
+  random:       "Random",
+  blosum62:     "BLOSUM62",
+  conservative: "Conservative",
+  sapiens:      "Sapiens LM",
+  saturation:   "Saturation",
+};
+
+const _MAX_VARIANT_HANDLES = 10;
+
+export function CDRMutatorNode({ id, data, selected }: NodeProps<NodeData>) {
+  const runStatus   = useCanvasStore((s) => s.runNodeStatuses[id]);
+  const nodeOutputs = useCanvasStore((s) => s.runNodeOutputs[id]);
+  const style       = CATEGORY_STYLE["mutagenesis"];
+
+  const strategy     = String(data.params.strategy ?? "blosum62");
+  const isSaturation = strategy === "saturation";
+
+  const numVariants = isSaturation
+    ? 0
+    : Math.max(1, Math.min(_MAX_VARIANT_HANDLES, Number(data.params.num_variants ?? 4)));
+
+  const activeCDRs = (
+    [
+      [data.params.cdr_h1, "H1"],
+      [data.params.cdr_h2, "H2"],
+      [data.params.cdr_h3, "H3"],
+      [data.params.cdr_l1, "L1"],
+      [data.params.cdr_l2, "L2"],
+      [data.params.cdr_l3, "L3"],
+    ] as [unknown, string][]
+  )
+    .filter(([v]) => v === true || v === "true")
+    .map(([, label]) => label)
+    .join("+") || "none";
+
+  const handles = Array.from({ length: numVariants }, (_, i) => ({
+    id:    `variant_${i + 1}`,
+    label: String(i + 1),
+    top:   `${10 + ((i + 0.5) / numVariants) * 80}%`,
+  }));
+
+  const minH = isSaturation ? 100 : Math.max(110, numVariants * 24 + 52);
+
+  return (
+    <div
+      style={{
+        borderColor: style.border,
+        minHeight:   minH,
+        boxShadow: selected
+          ? `0 0 0 2px ${style.border}99, 0 4px 28px ${style.glow}`
+          : `0 4px 20px ${style.glow}`,
+      }}
+      className={`relative bg-surface2 border-2 rounded-xl px-3.5 py-2.5 min-w-[192px]
+        transition-shadow ${runStatus ? STATUS_RING[runStatus] ?? "" : ""}`}
+    >
+      {/* Single input handle */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="in"
+        style={{ top: "50%", background: style.border }}
+        title="heavy_chain, light_chain"
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2 pr-7">
+        <div className="min-w-0">
+          <div className={`text-[10px] font-semibold uppercase tracking-wider mb-0.5 ${style.label}`}>
+            Mutagenesis
+          </div>
+          <div className="text-sm font-bold text-white leading-tight">CDR Mutator</div>
+        </div>
+        {runStatus && STATUS_DOT[runStatus] && (
+          <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
+        )}
+      </div>
+
+      {/* Strategy + CDR badge */}
+      <div className="mt-1.5 flex flex-col gap-0.5">
+        <span className="text-[10px] text-slate-400 leading-tight">
+          {_CDR_STRATEGY_LABEL[strategy] ?? strategy}
+        </span>
+        <span className="text-[10px] text-amber-600 font-mono leading-tight">
+          {activeCDRs}
+        </span>
+      </div>
+
+      {/* Variant number labels — inside right edge */}
+      {!isSaturation && (
+        <div className="absolute right-5 top-0 bottom-0 flex flex-col justify-around py-3 pointer-events-none">
+          {handles.map((h) => (
+            <span key={h.id} className="text-[9px] font-mono text-slate-500 text-right leading-none">
+              {h.label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Variant output handles */}
+      {isSaturation ? (
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="heavy_chain_variants"
+          style={{ top: "50%", background: style.border }}
+          title="saturation library — JSON list of all variants"
+          className="!w-3 !h-3 !border-2 !border-surface"
+        />
+      ) : (
+        handles.map((h) => {
+          const ready = nodeOutputs?.[h.id] != null;
+          return (
+            <Handle
+              key={h.id}
+              type="source"
+              position={Position.Right}
+              id={h.id}
+              style={{ top: h.top, background: ready ? "#34d399" : style.border }}
+              title={`Variant ${h.label} — heavy_chain + light_chain${ready ? " · ready" : ""}`}
+              className="!w-3 !h-3 !border-2 !border-surface"
+            />
+          );
+        })
+      )}
     </div>
   );
 }

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, X, FlaskConical, Square, FileBarChart } from "lucide-react";
+import { ChevronDown, ChevronRight, X, FlaskConical, Square, FileBarChart, RefreshCw } from "lucide-react";
 import { useRunWebSocket } from "@/hooks/useRunWebSocket";
 import { useCanvasStore } from "@/canvas/store";
+import type { LoopRun } from "@/api/loopRuns";
 import type { NodeRun, NodeRunStatus, Run, RunStatus } from "@/types";
 
 const STATUS_COLOR: Record<RunStatus | NodeRunStatus, string> = {
@@ -47,10 +48,21 @@ function NodeRunRow({ nodeRun, onAnalysis }: NodeRunRowProps) {
     nodeRun.outputs?.delta_g_bind != null
   );
 
+  const selectNode    = useCanvasStore((s) => s.selectNode);
+  const selectedNodeId = useCanvasStore((s) => s.selectedNodeId);
+  const isSelected    = selectedNodeId === nodeRun.node_id;
+
+  function handleRowClick() {
+    // Toggle selection: clicking the selected node deselects it
+    selectNode(isSelected ? null : nodeRun.node_id);
+    if (hasDetail) setOpen((v) => !v);
+  }
+
   return (
-    <div className="border border-border rounded-xl overflow-hidden">
+    <div className={`border rounded-xl overflow-hidden transition-colors
+      ${isSelected ? "border-amber-400/60 bg-amber-400/5" : "border-border"}`}>
       <button
-        onClick={() => hasDetail && setOpen((v) => !v)}
+        onClick={handleRowClick}
         className="w-full flex items-center gap-2 px-3 py-2.5 hover:bg-surface2 transition-colors"
       >
         <span className={`shrink-0 w-2 h-2 rounded-full ${STATUS_DOT[nodeRun.status] ?? "bg-slate-600"}`} />
@@ -195,7 +207,11 @@ function TerminalLog({ run }: { run: Run }) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface RunPanelProps {
-  runId: string;
+  runId: string | null;
+  loopRunId?: string | null;
+  loopData?: LoopRun | null;
+  onSelectIteration?: (runId: string) => void;
+  onCancelLoop?: () => void;
   onClose: () => void;
   onOpenAnalysis: (runId: string, nodeId: string) => void;
   onViewReport?: (runId: string) => void;
@@ -217,12 +233,13 @@ function useElapsed(createdAt: string | undefined, active: boolean): string {
   return elapsed;
 }
 
-export function RunPanel({ runId, onClose, onOpenAnalysis, onViewReport }: RunPanelProps) {
+export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onCancelLoop, onClose, onOpenAnalysis, onViewReport }: RunPanelProps) {
   const [run, setRun] = useState<Run | null>(null);
   const setRunNodeStatuses = useCanvasStore((s) => s.setRunNodeStatuses);
   const setRunNodeOutputs = useCanvasStore((s) => s.setRunNodeOutputs);
 
   useEffect(() => {
+    if (!runId) return;
     fetch(`/api/runs/${runId}/`)
       .then((r) => r.ok ? r.json() : null)
       .then((data) => { if (data) applyRun(data); })
@@ -243,7 +260,7 @@ export function RunPanel({ runId, onClose, onOpenAnalysis, onViewReport }: RunPa
     setRunNodeOutputs(outputs);
   }
 
-  useRunWebSocket(runId, applyRun);
+  useRunWebSocket(runId ?? "", applyRun);
 
   const elapsed = useElapsed(run?.created_at, run?.status === "running" || run?.status === "queued");
 
@@ -256,12 +273,26 @@ export function RunPanel({ runId, onClose, onOpenAnalysis, onViewReport }: RunPa
     await fetch(`/api/runs/${runId}/cancel/`, { method: "POST" });
   }
 
+  const isLoop = !!loopRunId && !!loopData;
+  const loopDone = loopData?.status !== "running";
+  const loopProgress = loopData
+    ? Math.round((loopData.run_ids.length / loopData.max_iterations) * 100)
+    : 0;
+  const LOOP_STATUS_COLOR: Record<string, string> = {
+    running:   "text-sky-400",
+    succeeded: "text-emerald-400",
+    failed:    "text-red-400",
+    cancelled: "text-slate-500",
+  };
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
-        <span className="text-sm font-bold text-white">Run Status</span>
+        <span className="text-sm font-bold text-white">
+          {isLoop ? "Loop Run" : "Run Status"}
+        </span>
         <div className="flex items-center gap-2">
-          {(run?.status === "succeeded" || run?.status === "failed") && onViewReport && (
+          {!isLoop && (run?.status === "succeeded" || run?.status === "failed") && onViewReport && runId && (
             <button
               onClick={() => onViewReport(runId)}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
@@ -272,7 +303,7 @@ export function RunPanel({ runId, onClose, onOpenAnalysis, onViewReport }: RunPa
               Report
             </button>
           )}
-          {run?.status === "running" && (
+          {!isLoop && run?.status === "running" && (
             <button
               onClick={handleStop}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
@@ -281,6 +312,17 @@ export function RunPanel({ runId, onClose, onOpenAnalysis, onViewReport }: RunPa
             >
               <Square size={10} fill="currentColor" />
               Stop
+            </button>
+          )}
+          {isLoop && !loopDone && (
+            <button
+              onClick={onCancelLoop}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
+                bg-red-950/60 border border-red-800/50 text-red-400 hover:bg-red-900/60
+                hover:text-red-300 transition-colors"
+            >
+              <Square size={10} fill="currentColor" />
+              Cancel Loop
             </button>
           )}
           <button
@@ -293,7 +335,64 @@ export function RunPanel({ runId, onClose, onOpenAnalysis, onViewReport }: RunPa
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {!run && (
+        {/* ── Loop summary banner ── */}
+        {isLoop && loopData && (
+          <div className="rounded-xl border border-border bg-surface2 px-4 py-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <RefreshCw size={13} className={loopData.status === "running" ? "animate-spin text-sky-400" : "text-slate-500"} />
+                <span className="text-xs font-semibold text-slate-300">
+                  Iteration {Math.min(loopData.current_iteration + 1, loopData.max_iterations)} / {loopData.max_iterations}
+                </span>
+              </div>
+              <span className={`text-xs font-bold ${LOOP_STATUS_COLOR[loopData.status] ?? "text-slate-400"}`}>
+                {loopData.status.toUpperCase()}
+              </span>
+            </div>
+            <div className="w-full h-1.5 bg-canvas rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-500 rounded-full transition-all duration-500"
+                style={{ width: `${loopProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* ── Loop iteration list ── */}
+        {isLoop && loopData && loopData.run_ids.length > 0 && (
+          <div className="space-y-1.5">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600 px-1">Iterations</div>
+            {loopData.run_ids.map((rid, i) => {
+              const isActive = rid === runId;
+              const isLast = i === loopData.run_ids.length - 1;
+              const iterStatus = isLast && loopData.status === "running" ? "running" : "succeeded";
+              return (
+                <button
+                  key={rid}
+                  onClick={() => onSelectIteration?.(rid)}
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs
+                    border transition-colors
+                    ${isActive
+                      ? "border-sky-500/40 bg-sky-500/10 text-sky-300"
+                      : "border-border hover:bg-surface2 text-slate-400 hover:text-slate-200"
+                    }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_DOT[iterStatus] ?? "bg-slate-600"}`} />
+                    <span className="font-mono">Iteration {i + 1}</span>
+                  </div>
+                  <span className="text-[10px] text-slate-600 font-mono truncate max-w-[80px]">{rid.slice(0, 8)}…</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── Divider when both loop + run are shown ── */}
+        {isLoop && run && <div className="border-t border-border" />}
+
+        {/* ── Regular run detail ── */}
+        {!run && !isLoop && (
           <div className="text-xs text-slate-600 animate-pulse text-center pt-6">Connecting…</div>
         )}
 
@@ -318,7 +417,7 @@ export function RunPanel({ runId, onClose, onOpenAnalysis, onViewReport }: RunPa
                 <NodeRunRow
                   key={nodeRun.node_id}
                   nodeRun={nodeRun}
-                  onAnalysis={() => onOpenAnalysis(runId, nodeRun.node_id)}
+                  onAnalysis={() => runId && onOpenAnalysis(runId, nodeRun.node_id)}
                 />
               ))}
             </div>

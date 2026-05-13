@@ -43,6 +43,13 @@ class ToolRegistry:
                         warnings.warn(f"[registry] default_file not found: {resolved}")
             self._tools[spec.id] = spec
 
+    def reload(self, tools_root: Path | None = None) -> None:
+        """Re-scan the tools/ directory and merge new/updated specs into the registry.
+
+        Safe to call while the server is running — only adds/updates entries.
+        """
+        self.load(tools_root)
+
     def get(self, tool_id: str) -> ToolSpec | None:
         return self._tools.get(tool_id)
 

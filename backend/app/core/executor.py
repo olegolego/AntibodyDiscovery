@@ -1,9 +1,12 @@
 """Pipeline executor. Runs as a FastAPI BackgroundTask; persists state to DB and emits WS events."""
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 _RUN_LOG_DIR = Path(os.getenv("PDP_RUN_LOG_DIR", "/tmp/pdp-runs"))
 _RUN_LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -27,7 +30,7 @@ def _persist_node_outputs(run_id: str, node_id: str, tool_id: str, outputs: dict
 from app.core.dag import topological_sort, upstream_outputs
 from app.core.events import manager
 from app.core.results_collector import collect as collect_results
-from app.db.models import NodeAnalysisRow, RunRow
+from app.db.models import LoopRunRow, NodeAnalysisRow, RunRow
 from app.db.session import AsyncSessionLocal
 from app.models.pipeline import Pipeline
 from app.models.run import NodeRun, NodeRunStatus, Run, RunStatus
@@ -96,11 +99,38 @@ async def _emit(run: Run) -> None:
     await manager.broadcast(run.id, {"type": "run_update", "run": slim})
 
 
-async def create_run(pipeline: Pipeline) -> Run:
+async def create_run(
+    pipeline: Pipeline,
+    loop_id: str | None = None,
+    iteration: int | None = None,
+) -> Run:
+    # Auto-detect loop node and create a LoopRunRow on the first iteration
+    if loop_id is None:
+        loop_node = next((n for n in pipeline.nodes if n.tool == "loop"), None)
+        if loop_node is not None:
+            import uuid as _uuid
+            loop_id = str(_uuid.uuid4())
+            iteration = 0
+            max_iter = int(loop_node.params.get("max_iterations", 5))
+            async with AsyncSessionLocal() as db:
+                db.add(LoopRunRow(
+                    id=loop_id,
+                    pipeline_id=pipeline.id,
+                    pipeline_snapshot=json.dumps(pipeline.model_dump(mode="json")),
+                    max_iterations=max_iter,
+                    current_iteration=0,
+                    status="running",
+                    run_ids="[]",
+                    loop_history="[]",
+                ))
+                await db.commit()
+
     run = Run(
         pipeline_id=pipeline.id,
         pipeline_snapshot=pipeline.model_dump(mode="json"),
         nodes={n.id: NodeRun(node_id=n.id) for n in pipeline.nodes},
+        loop_id=loop_id,
+        iteration=iteration,
     )
     async with AsyncSessionLocal() as db:
         db.add(RunRow(
@@ -108,6 +138,8 @@ async def create_run(pipeline: Pipeline) -> Run:
             pipeline_id=run.pipeline_id,
             status=run.status.value,
             data=run.model_dump_json(),
+            loop_id=loop_id,
+            iteration=iteration,
         ))
         await db.commit()
     return run
@@ -188,9 +220,9 @@ async def execute_run(run_id: str) -> None:
                 inputs[k] = content if content is not None else v
             else:
                 inputs[k] = v
-        # Compute nodes receive ALL outputs from every connected upstream node as
-        # Python variables — don't filter to just the wired port.
-        is_compute = node.tool == "compute"
+        # Compute-like nodes receive ALL outputs from every connected upstream node
+        # as Python variables — don't filter to just the wired port.
+        is_compute = node.tool in ("compute", "loop")
 
         for port, upstream_ref in upstream_outputs(node_id, pipeline.edges):
             up_node, up_port = upstream_ref.split(".", 1)
@@ -205,8 +237,15 @@ async def execute_run(run_id: str) -> None:
             elif up_port == "out":
                 inputs.update({k: v for k, v in node_outputs[up_node].items() if v is not None})
             elif up_port in node_outputs[up_node]:
-                target_key = port if port != "in" else up_port
-                inputs[target_key] = node_outputs[up_node][up_port]
+                val = node_outputs[up_node][up_port]
+                # Variant bundles from CDR Mutator (and similar tools) are dicts with
+                # heavy_chain / light_chain keys. Spread them directly into inputs when
+                # connecting to the generic "in" port so downstream tools see the right keys.
+                if port == "in" and isinstance(val, dict):
+                    inputs.update({k: v for k, v in val.items() if v is not None})
+                else:
+                    target_key = port if port != "in" else up_port
+                    inputs[target_key] = val
 
         ctx = RunContext(run_id=run.id, node_id=node_id, node_run=node_run)
         ctx._emit_fn = lambda: _emit(run)
@@ -287,6 +326,78 @@ async def execute_run(run_id: str) -> None:
     run.status = RunStatus.FAILED if failed_node_ids else RunStatus.SUCCEEDED
     await _save_run(run)
     await _emit(run)
+
+    if run.status == RunStatus.SUCCEEDED:
+        await _maybe_continue_loop(run, pipeline, run_id)
+
+
+async def _maybe_continue_loop(run: Run, pipeline: Pipeline, run_id: str) -> None:
+    """If this run is part of a loop campaign and more iterations remain, fire the next one."""
+    from app.core.loop_executor import (
+        _build_history_entry, _cancelled_loops, _extract_next_sequence,
+        _patch_pipeline, _save_loop,
+    )
+
+    loop_node = next((n for n in pipeline.nodes if n.tool == "loop"), None)
+    if loop_node is None:
+        return
+
+    max_iterations = int(loop_node.params.get("max_iterations", 5))
+    loop_id = run.loop_id
+    if loop_id is None:
+        return
+    iteration = run.iteration or 0
+
+    if loop_id in _cancelled_loops:
+        _cancelled_loops.discard(loop_id)
+        async with AsyncSessionLocal() as db:
+            loop_row = await db.get(LoopRunRow, loop_id)
+            run_ids = json.loads(loop_row.run_ids or "[]") if loop_row else []
+        await _save_loop(loop_id, "cancelled", "user_cancelled", iteration, run_ids)
+        return
+
+    # Build history entry for this iteration and persist
+    history_entry = await _build_history_entry(run_id, iteration, run)
+    async with AsyncSessionLocal() as db:
+        loop_row = await db.get(LoopRunRow, loop_id)
+        if loop_row is None:
+            return
+        run_ids = json.loads(loop_row.run_ids or "[]")
+        if run_id not in run_ids:
+            run_ids.append(run_id)
+        loop_history = json.loads(loop_row.loop_history or "[]")
+        if history_entry:
+            loop_history.append(history_entry)
+        loop_row.run_ids = json.dumps(run_ids)
+        loop_row.loop_history = json.dumps(loop_history)
+        loop_row.current_iteration = iteration
+        loop_row.updated_at = datetime.utcnow()
+        await db.commit()
+
+    if iteration + 1 >= max_iterations:
+        await _save_loop(loop_id, "succeeded", "max_iterations", iteration + 1, run_ids)
+        log.info("Loop %s completed %d/%d iterations", loop_id, iteration + 1, max_iterations)
+        return
+
+    # Extract next sequences and patch pipeline for next iteration
+    next_vh, next_vl = _extract_next_sequence(run)
+    next_pipeline = _patch_pipeline(pipeline, iteration + 1, next_vh, next_vl)
+    next_run = await create_run(next_pipeline, loop_id=loop_id, iteration=iteration + 1)
+
+    async with AsyncSessionLocal() as db:
+        loop_row = await db.get(LoopRunRow, loop_id)
+        if loop_row:
+            all_run_ids = json.loads(loop_row.run_ids or "[]")
+            if next_run.id not in all_run_ids:
+                all_run_ids.append(next_run.id)
+            loop_row.run_ids = json.dumps(all_run_ids)
+            loop_row.current_iteration = iteration + 1
+            loop_row.status = "running"
+            loop_row.updated_at = datetime.utcnow()
+            await db.commit()
+
+    log.info("Loop %s — iteration %d/%d — run %s", loop_id, iteration + 2, max_iterations, next_run.id)
+    await execute_run(next_run.id)
 
 
 async def get_run(run_id: str) -> Run | None:

@@ -38,3 +38,5 @@ class Run(BaseModel):
     status: RunStatus = RunStatus.QUEUED
     nodes: dict[str, NodeRun] = {}
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    loop_id: str | None = None
+    iteration: int | None = None

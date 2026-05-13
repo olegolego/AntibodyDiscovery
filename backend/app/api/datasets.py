@@ -5,9 +5,9 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import DatasetEntryRow, DatasetRow, MoleculeRow
@@ -90,17 +90,50 @@ async def create_dataset(body: dict[str, Any], db: AsyncSession = Depends(get_db
 
 
 @router.get("/{ds_id}/")
-async def get_dataset(ds_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+async def get_dataset(
+    ds_id: str,
+    q: str = Query("", description="Search name, VH, VL"),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     ds = await db.get(DatasetRow, ds_id)
     if ds is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    term = q.strip()
+    conditions = [DatasetEntryRow.dataset_id == ds_id]
+    if term:
+        like = f"%{term}%"
+        conditions.append(
+            or_(
+                DatasetEntryRow.name.ilike(like),
+                DatasetEntryRow.heavy_chain.ilike(like),
+                DatasetEntryRow.light_chain.ilike(like),
+            )
+        )
+
+    total_filtered = (await db.execute(
+        select(func.count(DatasetEntryRow.id)).where(*conditions)
+    )).scalar() or 0
+
+    total_all = total_filtered if not term else (
+        (await db.execute(
+            select(func.count(DatasetEntryRow.id))
+            .where(DatasetEntryRow.dataset_id == ds_id)
+        )).scalar() or 0
+    )
+
     entries = (await db.execute(
         select(DatasetEntryRow)
-        .where(DatasetEntryRow.dataset_id == ds_id)
+        .where(*conditions)
         .order_by(DatasetEntryRow.created_at.asc())
+        .limit(limit).offset(offset)
     )).scalars().all()
-    result = _ds_dict(ds, len(entries))
+
+    result = _ds_dict(ds, total_all)
     result["entries"] = [_entry_dict(e) for e in entries]
+    result["total_filtered"] = total_filtered
     return result
 
 

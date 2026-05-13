@@ -29,8 +29,7 @@ export function useRunWebSocket(
 
       ws.onclose = () => {
         if (closed) return;
-        // Reconnect after 2s unless run is in a terminal state
-        retryTimeout = setTimeout(connect, 2000);
+        retryTimeout = setTimeout(connect, 500);
       };
     }
 

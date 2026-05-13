@@ -7,6 +7,7 @@ export interface PortSpec {
   required: boolean;
   default?: unknown;
   description: string;
+  options?: string[];
 }
 
 export interface RuntimeSpec {
@@ -86,4 +87,6 @@ export interface Run {
   status: RunStatus;
   nodes: Record<string, NodeRun>;
   created_at?: string;
+  loop_id?: string | null;
+  iteration?: number | null;
 }

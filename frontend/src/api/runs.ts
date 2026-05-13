@@ -9,7 +9,7 @@ export async function submitRun(pipeline: Pipeline): Promise<Run> {
 
 export async function listRuns(): Promise<Run[]> {
   const { data } = await api.get<Run[]>("/runs/");
-  return data;
+  return Array.isArray(data) ? data : [];
 }
 
 export async function rerunRun(runId: string): Promise<Run> {

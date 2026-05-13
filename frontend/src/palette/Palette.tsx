@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Menu, X, FlaskConical, Code2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Menu, X, FlaskConical, Code2, Shuffle } from "lucide-react";
 import { useTools } from "@/api/tools";
 import { useCanvasStore } from "@/canvas/store";
 import type { ToolSpec } from "@/types";
@@ -10,6 +10,7 @@ const CATEGORY_META: Record<string, { label: string; color: string; order: numbe
   structure_design:     { label: "Structure Design",    color: "#a78bfa", order: 1 },
   structure_prediction: { label: "Structure Prediction",color: "#38bdf8", order: 2 },
   sequence_design:      { label: "Sequence Design",     color: "#34d399", order: 3 },
+  mutagenesis:          { label: "Mutagenesis",         color: "#f59e0b", order: 3.5 },
   sequence_embedding:   { label: "Sequence Embedding",  color: "#fb7185", order: 4 },
   docking:              { label: "Docking",             color: "#f97316", order: 5 },
   molecular_dynamics:   { label: "Molecular Dynamics",  color: "#2dd4bf", order: 6 },
@@ -66,12 +67,13 @@ function PaletteItem({ tool }: { tool: ToolSpec }) {
 function CategorySection({ category, tools }: { category: string; tools: ToolSpec[] }) {
   const meta = categoryMeta(category);
   const [open, setOpen] = useState(true);
-  const isToolbox = category === "toolbox";
-  const isCompute = category === "compute";
+  const isToolbox    = category === "toolbox";
+  const isCompute    = category === "compute";
+  const isMutagenesis = category === "mutagenesis";
 
   return (
     <div>
-      {(isToolbox || isCompute) && (
+      {(isToolbox || isCompute || isMutagenesis) && (
         <div className="mx-2 mt-3 mb-1 border-t border-border" />
       )}
       <button
@@ -88,6 +90,7 @@ function CategorySection({ category, tools }: { category: string; tools: ToolSpe
         >
           {isToolbox && <FlaskConical size={11} />}
           {isCompute && <Code2 size={11} />}
+          {isMutagenesis && <Shuffle size={11} />}
           {meta.label}
         </span>
         <span className="ml-auto text-[11px] text-slate-600">{tools.length}</span>
@@ -103,6 +106,11 @@ function CategorySection({ category, tools }: { category: string; tools: ToolSpe
           {isCompute && (
             <p className="px-2 pb-1 text-[10px] text-indigo-500 leading-snug">
               Write Python to combine or transform upstream outputs
+            </p>
+          )}
+          {isMutagenesis && (
+            <p className="px-2 pb-1 text-[10px] text-amber-600 leading-snug">
+              CDR-targeted variants — random · BLOSUM62 · conservative · Sapiens · saturation
             </p>
           )}
           {tools.map((tool) => (

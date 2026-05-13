@@ -44,10 +44,16 @@ export function SequencePickerModal({ onSelect, onClose }: Props) {
   }
 
   const entries = (detail?.entries ?? []).filter((e) => {
-    if (!e.heavy_chain) return false;
+    // Show all entries that have any sequence-like content
+    const hasSeq = !!(e.heavy_chain || e.light_chain);
+    if (!hasSeq) return false;
     if (!debouncedQ) return true;
     const q = debouncedQ.toLowerCase();
-    return (e.name ?? "").toLowerCase().includes(q) || (e.heavy_chain ?? "").toLowerCase().includes(q);
+    return (
+      (e.name ?? "").toLowerCase().includes(q) ||
+      (e.heavy_chain ?? "").toLowerCase().includes(q) ||
+      (e.light_chain ?? "").toLowerCase().includes(q)
+    );
   });
 
   const modal = (
@@ -121,7 +127,7 @@ export function SequencePickerModal({ onSelect, onClose }: Props) {
               )}
               {selectedDsId && entries.length === 0 && (
                 <div className="p-6 text-xs text-slate-600 text-center">
-                  {debouncedQ ? "No matches" : "No sequences with VH in this dataset"}
+                  {debouncedQ ? "No matches" : "No entries with sequences in this dataset"}
                 </div>
               )}
               {entries.map((entry: DatasetEntry) => (

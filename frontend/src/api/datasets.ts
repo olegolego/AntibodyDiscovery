@@ -32,6 +32,7 @@ export interface DatasetEntry {
 
 export interface DatasetDetail extends Dataset {
   entries: DatasetEntry[];
+  total_filtered: number;
 }
 
 export async function listDatasets(): Promise<Dataset[]> {
@@ -39,8 +40,16 @@ export async function listDatasets(): Promise<Dataset[]> {
   return data;
 }
 
-export async function getDataset(id: string): Promise<DatasetDetail> {
-  const { data } = await api.get<DatasetDetail>(`/datasets/${id}/`);
+export async function getDataset(
+  id: string,
+  opts: { q?: string; limit?: number; offset?: number } = {},
+): Promise<DatasetDetail> {
+  const params = new URLSearchParams();
+  if (opts.q) params.set("q", opts.q);
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  if (opts.offset !== undefined) params.set("offset", String(opts.offset));
+  const qs = params.toString();
+  const { data } = await api.get<DatasetDetail>(`/datasets/${id}/${qs ? `?${qs}` : ""}`);
   return data;
 }
 

@@ -284,7 +284,7 @@ export function Playground({ onBack }: PlaygroundProps) {
           Back to Canvas
         </button>
         <div className="w-px h-4 bg-border" />
-        <span className="text-sm font-bold text-white">Playground</span>
+        <span className="text-sm font-bold text-white">Tool Understanding</span>
         {!selectedTool && (
           <span className="text-xs text-slate-600">
             Click a tool to preview its paper and brainstorm ideas
@@ -303,7 +303,7 @@ export function Playground({ onBack }: PlaygroundProps) {
           {!isLoading && (
             <div className="max-w-5xl mx-auto">
               <div className="mb-8 text-center">
-                <h1 className="text-2xl font-bold text-white mb-2">Tool Playground</h1>
+                <h1 className="text-2xl font-bold text-white mb-2">Tool Understanding</h1>
                 <p className="text-slate-500 text-sm">
                   Explore the science behind each tool, read the original paper, and capture your ideas.
                 </p>
