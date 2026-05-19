@@ -1,11 +1,12 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { BookOpen, ChevronDown, ClipboardList, Database, FilePlus, FlaskConical, FolderOpen, Play, Save, Terminal, Trash2, Wrench } from "lucide-react";
+import { BarChart2, BookOpen, ChevronDown, ClipboardList, Database, FilePlus, FlaskConical, FolderOpen, Loader2, Play, Save, Sparkles, Terminal, Trash2, Wrench } from "lucide-react";
 import { usePipelines, savePipeline, deletePipeline } from "@/api/pipelines";
 import { useCanvasStore } from "@/canvas/store";
 import { useTools } from "@/api/tools";
 import { randomUUID } from "@/utils";
 import type { Pipeline } from "@/types";
+import { AIPipelineModal } from "./AIPipelineModal";
 
 interface PipelineBarProps {
   name: string;
@@ -21,6 +22,7 @@ interface PipelineBarProps {
   onOpenLibrary: () => void;
   onOpenTerminal: () => void;
   onOpenRuns: () => void;
+  onOpenMLAnalysis: () => void;
   onNewPipeline: () => void;
 }
 
@@ -34,9 +36,10 @@ function ts(iso: string | undefined): string {
 export function PipelineBar({
   name, onNameChange, onRun, running, loopRunning,
   pipelineId, onPipelineIdChange,
-  onOpenPlayground, onOpenWorkshop, onOpenResults, onOpenLibrary, onOpenTerminal, onOpenRuns, onNewPipeline,
+  onOpenPlayground, onOpenWorkshop, onOpenResults, onOpenLibrary, onOpenTerminal, onOpenRuns, onOpenMLAnalysis, onNewPipeline,
 }: PipelineBarProps) {
   const [showLoad, setShowLoad] = useState(false);
+  const [showAI, setShowAI] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -123,6 +126,18 @@ export function PipelineBar({
           ⚠ {saveError}
         </span>
       )}
+
+      {/* Pipeline Generator */}
+      <button
+        onClick={() => setShowAI(true)}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
+          text-violet-300 hover:text-white border border-violet-500/30 hover:border-violet-400/60
+          hover:bg-violet-500/10 transition-all duration-150"
+        style={{ boxShadow: "0 0 10px rgba(139,92,246,0.15)" }}
+      >
+        <Sparkles size={13} />
+        <span>Pipeline Generator</span>
+      </button>
 
       {/* New */}
       <button
@@ -275,6 +290,17 @@ export function PipelineBar({
         <span>Results</span>
       </button>
 
+      {/* ML Analysis */}
+      <button
+        onClick={onOpenMLAnalysis}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+          text-slate-400 hover:text-white border border-transparent
+          hover:border-violet-500/40 hover:bg-violet-500/10 transition-all"
+      >
+        <BarChart2 size={13} />
+        <span>Analysis</span>
+      </button>
+
       {/* Run */}
       <button
         onClick={onRun}
@@ -286,9 +312,22 @@ export function PipelineBar({
           disabled:cursor-not-allowed"
         style={{ boxShadow: nodes.length > 0 && !running && !loopRunning ? "0 0 16px rgba(99,102,241,0.4)" : undefined }}
       >
-        <Play size={13} fill="white" />
-        <span>{running ? "Running…" : "Run"}</span>
+        {running
+          ? <Loader2 size={13} className="animate-spin" />
+          : <Play size={13} fill="white" />}
+        <span>{running ? "Submitting…" : "Run"}</span>
       </button>
+
+      {showAI && (
+        <AIPipelineModal
+          onClose={() => setShowAI(false)}
+          onPipelineLoaded={(pName, pId) => {
+            onPipelineIdChange(pId);
+            onNameChange(pName);
+            onNewPipeline();
+          }}
+        />
+      )}
     </div>
   );
 }

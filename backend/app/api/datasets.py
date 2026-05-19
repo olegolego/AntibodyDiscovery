@@ -59,17 +59,18 @@ def _entry_dict(e: DatasetEntryRow) -> dict:
 
 @router.get("/")
 async def list_datasets(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    # Single query: datasets + per-dataset entry counts via GROUP BY
+    counts_q = (
+        select(DatasetEntryRow.dataset_id, func.count().label("cnt"))
+        .group_by(DatasetEntryRow.dataset_id)
+        .subquery()
+    )
     rows = (await db.execute(
-        select(DatasetRow).order_by(DatasetRow.updated_at.desc())
-    )).scalars().all()
-    result = []
-    for ds in rows:
-        count_row = await db.execute(
-            select(DatasetEntryRow.id).where(DatasetEntryRow.dataset_id == ds.id)
-        )
-        count = len(count_row.scalars().all())
-        result.append(_ds_dict(ds, count))
-    return result
+        select(DatasetRow, func.coalesce(counts_q.c.cnt, 0).label("entry_count"))
+        .outerjoin(counts_q, DatasetRow.id == counts_q.c.dataset_id)
+        .order_by(DatasetRow.updated_at.desc())
+    )).all()
+    return [_ds_dict(ds, int(count)) for ds, count in rows]
 
 
 @router.post("/", status_code=201)

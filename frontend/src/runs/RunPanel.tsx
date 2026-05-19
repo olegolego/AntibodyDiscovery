@@ -112,90 +112,91 @@ interface LogLine {
 
 function TerminalLog({ run }: { run: Run }) {
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [autoScroll, setAutoScroll] = useState(true);
 
   const runningEntry = Object.entries(run.nodes).find(([, nr]) => nr.status === "running");
-  const [runningId, runningNode] = runningEntry ?? [null, null];
+  const [runningId] = runningEntry ?? [null, null];
   const isRunning = !!runningEntry;
 
-  // Last node that has finished with logs/error — used as context when running node is silent
-  const lastFinishedEntry = [...Object.entries(run.nodes)]
-    .reverse()
-    .find(([id, nr]) => id !== runningId && (nr.logs.length > 0 || nr.error));
-  const [lastId, lastNode] = lastFinishedEntry ?? [null, null];
+  // Build a continuous stream: all completed nodes in order, then the running node last.
+  // Each line is prefixed with the node id so you always know who emitted it.
+  const allLines: LogLine[] = [];
+  for (const [nodeId, nr] of Object.entries(run.nodes)) {
+    if (nr.status === "running") continue; // append running node at the end
+    for (const text of nr.logs) allLines.push({ nodeId, text, kind: "log" });
+    if (nr.error) allLines.push({ nodeId, text: nr.error, kind: "error" });
+  }
+  if (runningEntry) {
+    const [rId, rNr] = runningEntry;
+    for (const text of rNr.logs) allLines.push({ nodeId: rId, text, kind: "log" });
+    if (rNr.error) allLines.push({ nodeId: rId, text: rNr.error, kind: "error" });
+  }
 
-  // Running node lines (may be empty at startup)
-  const runningLines: LogLine[] = runningNode
-    ? [
-        ...runningNode.logs.map((text) => ({ nodeId: runningId!, text, kind: "log" as const })),
-        ...(runningNode.error ? [{ nodeId: runningId!, text: runningNode.error, kind: "error" as const }] : []),
-      ]
-    : [];
-
-  // When the running node hasn't logged anything yet, show last finished node's output as context
-  const showContext = isRunning && runningLines.length === 0 && !!lastNode;
-
-  const displayLines: LogLine[] = showContext
-    ? [
-        ...lastNode!.logs.map((text) => ({ nodeId: lastId!, text, kind: "log" as const })),
-        ...(lastNode!.error ? [{ nodeId: lastId!, text: lastNode!.error, kind: "error" as const }] : []),
-      ]
-    : runningLines.length > 0
-    ? runningLines
-    : !isRunning
-    ? (lastNode
-        ? [
-            ...lastNode.logs.map((text) => ({ nodeId: lastId!, text, kind: "log" as const })),
-            ...(lastNode.error ? [{ nodeId: lastId!, text: lastNode.error, kind: "error" as const }] : []),
-          ]
-        : [])
-    : [];
+  const totalLines = allLines.length;
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [displayLines.length]);
+    if (autoScroll) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [totalLines, autoScroll]);
 
-  const titleId = showContext ? lastId : (runningId ?? lastId);
+  function handleScroll(e: React.UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    setAutoScroll(atBottom);
+  }
 
   return (
     <div className="shrink-0 border-t border-white/10 bg-[#0d0d0d] rounded-b-xl overflow-hidden">
-      {/* Terminal title bar */}
+      {/* Title bar */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5 bg-[#111]">
-        <span className="text-[10px] text-slate-500 font-mono select-none">
-          {titleId ?? "pipeline log"}
-          {showContext && (
-            <span className="text-slate-700 ml-1">(context)</span>
-          )}
-        </span>
+        <span className="text-[10px] text-slate-500 font-mono select-none">pipeline log</span>
         <div className="flex items-center gap-2">
           {isRunning && runningId && (
             <span className="text-[9px] text-sky-400 font-mono">
               {runningId} <span className="animate-pulse">●</span>
             </span>
           )}
+          {!autoScroll && (
+            <button
+              onClick={() => { setAutoScroll(true); bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }}
+              className="text-[9px] text-slate-500 hover:text-slate-300 font-mono transition-colors"
+            >
+              ↓ tail
+            </button>
+          )}
         </div>
       </div>
 
       {/* Log body */}
-      <div className="h-44 overflow-y-auto px-3 py-2 space-y-0.5 font-mono text-xs">
-        {displayLines.length === 0 && !isRunning && (
+      <div
+        className="h-44 overflow-y-auto px-3 py-2 font-mono text-xs"
+        onScroll={handleScroll}
+      >
+        {allLines.length === 0 && !isRunning && (
           <span className="text-slate-700">no output yet</span>
         )}
-        {displayLines.length === 0 && isRunning && !showContext && (
+        {allLines.length === 0 && isRunning && (
           <span className="text-slate-600 animate-pulse">starting {runningId}…</span>
         )}
-        {displayLines.map((line, i) => (
-          <div key={i} className={`leading-5 ${showContext ? "opacity-40" : ""}`}>
-            <span className={line.kind === "error" ? "text-red-400" : "text-emerald-300"}>
-              {line.text}
-            </span>
-          </div>
-        ))}
-        {isRunning && runningLines.length > 0 && (
-          <div className="text-slate-500 animate-pulse leading-5">▊</div>
+        {allLines.map((line, i) => {
+          const isRunningNode = line.nodeId === runningId;
+          return (
+            <div key={i} className="leading-5 flex gap-1.5 min-w-0">
+              <span className={`shrink-0 text-[10px] ${isRunningNode ? "text-sky-600" : "text-slate-600"}`}>
+                {line.nodeId}
+              </span>
+              <span className={`break-all ${line.kind === "error" ? "text-red-400" : isRunningNode ? "text-emerald-300" : "text-slate-400"}`}>
+                {line.text}
+              </span>
+            </div>
+          );
+        })}
+        {isRunning && runningEntry && runningEntry[1].logs.length > 0 && (
+          <div className="text-slate-600 animate-pulse leading-5 pl-1">▊</div>
         )}
-        {showContext && (
-          <div className="mt-1 text-[10px] text-sky-600 animate-pulse">
-            ↑ last output · waiting for {runningId}…
+        {isRunning && runningEntry && runningEntry[1].logs.length === 0 && (
+          <div className="leading-5 flex gap-1.5">
+            <span className="shrink-0 text-[10px] text-sky-600">{runningId}</span>
+            <span className="text-slate-600 animate-pulse">running…</span>
           </div>
         )}
         <div ref={bottomRef} />
@@ -211,7 +212,6 @@ interface RunPanelProps {
   loopRunId?: string | null;
   loopData?: LoopRun | null;
   onSelectIteration?: (runId: string) => void;
-  onCancelLoop?: () => void;
   onClose: () => void;
   onOpenAnalysis: (runId: string, nodeId: string) => void;
   onViewReport?: (runId: string) => void;
@@ -233,10 +233,12 @@ function useElapsed(createdAt: string | undefined, active: boolean): string {
   return elapsed;
 }
 
-export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onCancelLoop, onClose, onOpenAnalysis, onViewReport }: RunPanelProps) {
+export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClose, onOpenAnalysis, onViewReport }: RunPanelProps) {
   const [run, setRun] = useState<Run | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const setRunNodeStatuses = useCanvasStore((s) => s.setRunNodeStatuses);
   const setRunNodeOutputs = useCanvasStore((s) => s.setRunNodeOutputs);
+  const runNodeStatuses = useCanvasStore((s) => s.runNodeStatuses);
 
   useEffect(() => {
     if (!runId) return;
@@ -268,9 +270,39 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onCanc
     onClose();
   }
 
+  function markCancelling() {
+    const updated = Object.fromEntries(
+      Object.entries(runNodeStatuses).map(([id, s]) => [
+        id, (s === "running" || s === "queued") ? "cancelling" : s,
+      ])
+    ) as Record<string, NodeRunStatus>;
+    setRunNodeStatuses(updated);
+  }
+
   async function handleStop() {
-    if (!runId) return;
-    await fetch(`/api/runs/${runId}/cancel/`, { method: "POST" });
+    if (!runId || cancelling) return;
+    setCancelling(true);
+    markCancelling();
+    try {
+      await fetch(`/api/runs/${runId}/cancel/`, { method: "POST" });
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  async function handleCancelLoop() {
+    if (cancelling || !loopData?.run_ids.length) return;
+    setCancelling(true);
+    markCancelling();
+    try {
+      await Promise.all(
+        loopData.run_ids.map((id) =>
+          fetch(`/api/runs/${id}/cancel/`, { method: "POST" }).catch(() => {})
+        )
+      );
+    } finally {
+      setCancelling(false);
+    }
   }
 
   const isLoop = !!loopRunId && !!loopData;
@@ -306,23 +338,29 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onCanc
           {!isLoop && run?.status === "running" && (
             <button
               onClick={handleStop}
+              disabled={cancelling}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
                 bg-red-950/60 border border-red-800/50 text-red-400 hover:bg-red-900/60
-                hover:text-red-300 transition-colors"
+                hover:text-red-300 transition-colors disabled:opacity-60"
             >
-              <Square size={10} fill="currentColor" />
-              Stop
+              {cancelling
+                ? <RefreshCw size={10} className="animate-spin" />
+                : <Square size={10} fill="currentColor" />}
+              {cancelling ? "Cancelling…" : "Stop"}
             </button>
           )}
           {isLoop && !loopDone && (
             <button
-              onClick={onCancelLoop}
+              onClick={handleCancelLoop}
+              disabled={cancelling}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
                 bg-red-950/60 border border-red-800/50 text-red-400 hover:bg-red-900/60
-                hover:text-red-300 transition-colors"
+                hover:text-red-300 transition-colors disabled:opacity-60"
             >
-              <Square size={10} fill="currentColor" />
-              Cancel Loop
+              {cancelling
+                ? <RefreshCw size={10} className="animate-spin" />
+                : <Square size={10} fill="currentColor" />}
+              {cancelling ? "Cancelling…" : "Cancel Loop"}
             </button>
           )}
           <button
@@ -357,6 +395,66 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onCanc
             </div>
           </div>
         )}
+
+        {/* ── Score history table ── */}
+        {isLoop && loopData && (loopData.score_history?.length ?? 0) > 0 && (() => {
+          const history = loopData.score_history!;
+          const bestScore = Math.min(...history.filter(e => e.best_score !== null).map(e => e.best_score as number));
+          const showPending = loopData.status === "running";
+          return (
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-600 px-1">Score History</div>
+              <div className="rounded-xl border border-border bg-surface2 overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border">
+                      <th className="text-left px-3 py-1.5 text-[10px] text-slate-600 font-medium">Iter</th>
+                      <th className="text-left px-3 py-1.5 text-[10px] text-slate-600 font-medium">CDR3</th>
+                      <th className="text-right px-3 py-1.5 text-[10px] text-slate-600 font-medium">HADDOCK</th>
+                      <th className="w-6" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((entry, i) => {
+                      const prev = i > 0 ? history[i - 1].best_score : null;
+                      const isBest = entry.best_score !== null && entry.best_score === bestScore;
+                      const improved = prev !== null && entry.best_score !== null && entry.best_score < prev;
+                      const regressed = prev !== null && entry.best_score !== null && entry.best_score > prev;
+                      return (
+                        <tr key={entry.iteration} className={`border-b border-border/40 last:border-0 ${isBest ? "bg-emerald-500/5" : ""}`}>
+                          <td className="px-3 py-1.5 text-slate-500 font-mono">{entry.iteration}</td>
+                          <td className="px-3 py-1.5 text-slate-400 font-mono truncate max-w-[80px]" title={entry.vh_prefix}>
+                            {entry.vh_cdr3 ?? `…${entry.vh_prefix.slice(-14)}`}
+                          </td>
+                          <td
+                            className={`px-3 py-1.5 text-right font-mono font-semibold ${isBest ? "text-emerald-300" : "text-emerald-500"}`}
+                            title={Object.entries(entry.scores_by_rank).map(([r, v]) => `${r}: ${v.toFixed(1)}`).join("  ")}
+                          >
+                            {entry.best_score !== null ? entry.best_score.toFixed(1) : "—"}
+                          </td>
+                          <td className="px-1 py-1.5 text-right">
+                            {improved && <span className="text-emerald-400 text-[10px]">↓</span>}
+                            {regressed && <span className="text-red-400 text-[10px]">↑</span>}
+                            {isBest && <span className="text-emerald-300 text-[9px] font-bold">★</span>}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {showPending && (
+                      <tr className="border-t border-border/40">
+                        <td className="px-3 py-1.5 text-slate-600 font-mono">{loopData.current_iteration}</td>
+                        <td className="px-3 py-1.5 text-slate-700 font-mono italic" colSpan={2}>running…</td>
+                        <td className="px-1 py-1.5">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── Loop iteration list ── */}
         {isLoop && loopData && loopData.run_ids.length > 0 && (

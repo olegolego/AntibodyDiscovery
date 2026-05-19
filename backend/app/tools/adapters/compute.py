@@ -39,5 +39,13 @@ class ComputeAdapter:
             for line in outputs["stdout"].splitlines():
                 await run_ctx.alog(f"[stdout] {line}")
 
+        # Spread result dict keys at top level so downstream compute/loop_end nodes
+        # can reference them as {node_id}_{key} without unwrapping the result dict.
+        result = outputs.get("result")
+        if isinstance(result, dict):
+            for k, v in result.items():
+                if k not in outputs:
+                    outputs[k] = v
+
         await run_ctx.alog("Compute done.")
         return outputs

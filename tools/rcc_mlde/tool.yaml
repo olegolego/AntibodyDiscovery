@@ -1,0 +1,219 @@
+id: rcc_mlde
+name: RCC-MLDE Committee
+version: "1.0"
+category: ml
+description: >
+  Rank-Conditioned Committee for Machine Learning-Assisted Directed Evolution.
+  Trains a bootstrap committee of surrogate models — one committee per "rank"
+  (e.g. ImmuneBuilder conformation, MD replica, docking pose, force-field
+  variant). Decomposes uncertainty into two orthogonal components:
+    • Epistemic uncertainty (σ_epi) — within-rank committee dispersion
+    • Conformational uncertainty (σ_conf) — between-rank disagreement
+  Acquisition function: α(x) = μ̄ + κ_epi·σ_epi − κ_conf·σ_conf
+  Works for any property-optimization task, not just antibody docking.
+  Supports Ridge regression (fast, default), shallow DNN (MLPRegressor),
+  and Gradient Boosted Trees (HistGBM). Falls back to single-rank UCB when
+  only one rank is provided.
+
+inputs:
+  # ── Accumulated dataset (loop mode) ──────────────────────────────────────────
+  - name: accumulated_dataset
+    type: json
+    required: false
+    default: null
+    description: >
+      Dataset accumulated from ALL previous loop iterations. Injected
+      automatically by the loop executor when this node runs inside a loop —
+      do not wire manually. Format:
+        {"embeddings": {seq_id: [float]},
+         "scores_rank_1": {seq_id: float}, ...}
+      When provided, merged with the current round's embeddings/scores so the
+      committee trains on the growing historical dataset (rounds 1 + 2 + ... + N).
+
+  # ── Embeddings ───────────────────────────────────────────────────────────────
+  - name: embeddings
+    type: json
+    required: false
+    default: null
+    description: >
+      Training embeddings for the CURRENT round — {seq_id: [float, ...]}. Any
+      fixed-dim embedding works: AbMAP (512d), ESM-8M (320d), ESM-650M (1280d).
+      Merged with accumulated_dataset from previous rounds when in a loop.
+
+  - name: candidate_embeddings
+    type: json
+    required: false
+    default: null
+    description: >
+      Embeddings for new candidate sequences to score (inference mode).
+      Same format as embeddings. If omitted the tool uses the training set
+      for scoring (useful when training = evaluation set).
+
+  # ── Scores per rank ──────────────────────────────────────────────────────────
+  - name: scores_rank_1
+    type: json
+    required: true
+    default: null
+    description: >
+      Scores for rank 1 — {seq_id: float}. Lower is better for docking scores
+      (HADDOCK), higher for fitness/activity labels. All ranks are internally
+      sign-flipped if lower=better (set lower_is_better=true).
+      Sequences present here but not in embeddings are silently skipped.
+
+  - name: scores_rank_2
+    type: json
+    required: false
+    default: null
+    description: "Scores for rank 2 (optional). Same format as scores_rank_1."
+
+  - name: scores_rank_3
+    type: json
+    required: false
+    default: null
+    description: "Scores for rank 3 (optional). Same format as scores_rank_1."
+
+  - name: scores_rank_4
+    type: json
+    required: false
+    default: null
+    description: "Scores for rank 4 (optional). Same format as scores_rank_1."
+
+  # ── Committee params ─────────────────────────────────────────────────────────
+  # ── Mode ─────────────────────────────────────────────────────────────────────
+  - name: mode
+    type: str
+    required: false
+    default: "train"
+    options:
+      - "train"
+      - "score"
+    description: >
+      train: fit the committee on embeddings + scores (use after HADDOCK).
+      score: run inference only using a model_artifact from an upstream train node
+             (use to score CDR candidates before docking).
+      If not set, inferred from wiring: score if model_artifact is connected
+      and scores_rank_1 is not.
+
+  - name: n_committee
+    type: int
+    required: false
+    default: 5
+    description: >
+      Committee size M — number of models trained per rank via bootstrap
+      resampling. Larger M → more stable uncertainty estimates but slower.
+      Recommended: 5–10.
+
+  - name: model_type
+    type: str
+    required: false
+    default: "ridge"
+    options:
+      - "ridge"
+      - "dnn"
+      - "gbm"
+    description: >
+      Surrogate model type.
+      ridge: Ridge regression (L2) — fast, good baseline for low-data regimes.
+      dnn: sklearn MLPRegressor (2 hidden layers, ReLU) — nonlinear, ~2× slower.
+      gbm: HistGradientBoosting — handles feature interactions well, slow.
+
+  - name: kappa_epi
+    type: float
+    required: false
+    default: 2.0
+    description: >
+      Exploration weight for epistemic uncertainty (κ_epi). Higher → explore
+      high-uncertainty regions more aggressively. Set to 0 for pure exploitation.
+
+  - name: kappa_conf
+    type: float
+    required: false
+    default: 0.5
+    description: >
+      Penalty weight for conformational/rank uncertainty (κ_conf). Higher →
+      penalize sequences with inconsistent scores across ranks more strongly.
+      Set to 0 to ignore rank disagreement.
+
+  - name: rank_weights
+    type: json
+    required: false
+    default: null
+    description: >
+      Per-rank importance weights as [w1, w2, w3, w4] (list of floats, sums
+      to 1 after normalization). Defaults to uniform weights. Use to downweight
+      noisy or low-quality ranks.
+
+  - name: top_k
+    type: int
+    required: false
+    default: 20
+    description: "Return this many top-scoring candidates sorted by acquisition function."
+
+  - name: lower_is_better
+    type: bool
+    required: false
+    default: true
+    description: >
+      If true (default for docking), scores are negated internally so the
+      committee maximizes the negative score. Set false for activity/fitness
+      labels where higher is better.
+
+  - name: task
+    type: str
+    required: false
+    default: "regression"
+    options:
+      - "regression"
+      - "binary_classification"
+    description: >
+      Task type. regression: continuous property prediction (HADDOCK scores,
+      ddG, Tm). binary_classification: binding/non-binding labels.
+
+outputs:
+  - name: acquisition_scores
+    type: json
+    description: >
+      {seq_id: float} — RCC acquisition values for all candidate sequences.
+      Higher is better. α = μ̄ + κ_epi·σ_epi − κ_conf·σ_conf.
+
+  - name: top_sequences
+    type: json
+    description: >
+      List of top-k seq_ids sorted by acquisition score (best first).
+      Wire to cdr_mutator or sequence_input for the next design round.
+
+  - name: mean_predictions
+    type: json
+    description: "{seq_id: float} — rank-averaged committee mean prediction for each candidate."
+
+  - name: epistemic_uncertainty
+    type: json
+    description: "{seq_id: float} — σ_epi per candidate (within-rank committee variance)."
+
+  - name: conformational_uncertainty
+    type: json
+    description: "{seq_id: float} — σ_conf per candidate (between-rank disagreement). 0 if single rank."
+
+  - name: rank_predictions
+    type: json
+    description: >
+      {rank_id: {seq_id: {mean, std}}} — per-rank per-candidate mean and std.
+      Useful for debugging or visualization.
+
+  - name: model_artifact
+    type: json
+    description: >
+      Serialized committee models (base64-encoded pickle, one per rank).
+      Pass to a downstream rcc_mlde node (candidate_embeddings mode) for
+      fast re-scoring without retraining.
+
+  - name: metrics
+    type: json
+    description: >
+      Training diagnostics: committee size, rank count, training set size,
+      per-rank cross-val RMSE, model type, acquisition param summary.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 600

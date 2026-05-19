@@ -1,0 +1,152 @@
+id: developability_filter
+name: Developability Filter
+version: "1.0"
+category: bioinformatics
+description: >
+  Research-backed antibody developability assessment for CDR optimization loops.
+  Evaluates each candidate variant against a curated panel of sequence-based
+  liability checks, then ranks passing variants by acquisition score.
+
+  Checks implemented (with primary citations):
+
+  PTM LIABILITIES
+  ─────────────────────────────────────────────────────────────────────────
+  • N-glycosylation  N-[^P]-[ST]
+    Jefferis R. (2009) Nat Rev Drug Discov 8:226-234.
+    Schiestl M. et al. (2011) Nat Biotechnol 29:310-312.
+
+  • Deamidation  NG (fastest), NS, NT, NA, NH
+    Robinson NE & Robinson AB (2001) PNAS 98:944-949.
+    Sydow JF et al. (2014) mAbs 6:613-623.
+
+  • Asp isomerization  DG (fastest), DS, DT, DA, DD
+    Wakankar AA & Borchardt RT (2006) J Pharm Sci 95:2321-2336.
+    Vlasak J & Ionescu R (2011) mAbs 3:253-263.
+
+  • Trp/Met oxidation  W, M in CDR context
+    Stracke JO et al. (2014) mAbs 6:1229-1242.
+    Wei Z et al. (2018) Anal Chem 90:5668-5675.
+
+  • Asp-Pro cleavage  DP  (acid-labile peptide bond)
+    Bhatt NP et al. (1990) J Biol Chem 265:4939.
+
+  AGGREGATION & BIOPHYSICS
+  ─────────────────────────────────────────────────────────────────────────
+  • Aromatic overload  (F+W+Y)/len > 0.15 in CDR-H3
+    Chennamsetty N et al. (2009) PNAS 106:11937-11942.
+
+  • Hydrophobic patch  ≥4 consecutive residues from FILMVWY
+    Jarasch A et al. (2015) J Mol Biol 427:1256-1274.
+
+  • Isoelectric point extremes  pI < 5.0 or pI > 9.5
+    Datta-Mannan A et al. (2015) Drug Metab Dispos 43:1379-1387.
+    Zheng L et al. (2021) mAbs 13:1929169.
+
+  SEQUENCE INSTABILITY
+  ─────────────────────────────────────────────────────────────────────────
+  • Polyspecificity / cationic CDR-H3  ≥3 KRH in the CDR-H3 region
+    Jain T et al. (2017) PNAS 114:944-949.
+    Hotzel I et al. (2012) mAbs 4:753-760.
+
+  • CDR-H3 length  > 20 aa → structural risk, expression difficulty
+    Zemlin M et al. (2003) J Mol Biol 334:733-749.
+    Weitzner BD & Gray JJ (2017) PLOS Comput Biol 13:e1005625.
+
+  • Long homopolymer run  ≥5 identical consecutive residues
+    Affects expression, purification, and stability (general rule).
+
+  • Unpaired cysteine  odd total count in VH
+    Allen MJ et al. (2009) Biochemistry 48:3746-3754.
+
+  • Net charge extreme  VH net charge < −4 or > +8
+    Datta-Mannan A et al. (2015) Drug Metab Dispos 43:1379-1387.
+
+inputs:
+  # ── CDR variants from cdr_mutator ────────────────────────────────────────
+  - name: variant_1
+    type: json
+    required: false
+    description: "{heavy_chain, light_chain} bundle from cdr_mutator."
+  - name: variant_2
+    type: json
+    required: false
+    description: "{heavy_chain, light_chain} bundle from cdr_mutator."
+  - name: variant_3
+    type: json
+    required: false
+    description: "{heavy_chain, light_chain} bundle from cdr_mutator."
+  - name: variant_4
+    type: json
+    required: false
+    description: "{heavy_chain, light_chain} bundle from cdr_mutator."
+  - name: variant_5
+    type: json
+    required: false
+    description: "{heavy_chain, light_chain} bundle from cdr_mutator."
+  - name: variant_6
+    type: json
+    required: false
+    description: "{heavy_chain, light_chain} bundle from cdr_mutator."
+  - name: variant_7
+    type: json
+    required: false
+    description: "{heavy_chain, light_chain} bundle from cdr_mutator."
+  - name: variant_8
+    type: json
+    required: false
+    description: "{heavy_chain, light_chain} bundle from cdr_mutator."
+
+  # ── Acquisition scores (from rcc_mlde or dnn_mlde) ───────────────────────
+  - name: acquisition_scores
+    type: json
+    required: false
+    default: null
+    description: >
+      {vh_sequence: float} acquisition scores from rcc_score or dnn_score node.
+      Used to rank feasible variants. Variants without a score are ranked last.
+
+  # ── Thresholds ────────────────────────────────────────────────────────────
+  - name: max_ptm_liabilities
+    type: int
+    required: false
+    default: 3
+    description: >
+      Maximum allowed PTM liabilities (deamidation, isomerization, oxidation,
+      glycosylation) before a variant is rejected. Default 3.
+
+  - name: hard_fail_checks
+    type: json
+    required: false
+    default: ["N-glycosylation", "Unpaired-Cys", "Homopolymer"]
+    description: >
+      Checks that always cause rejection regardless of count. List of check names.
+      Default: N-glycosylation, Unpaired-Cys, Homopolymer.
+
+outputs:
+  - name: feasible_variants
+    type: json
+    description: >
+      {vh_seq: {heavy_chain, light_chain, acquisition_score, n_liabilities}} for
+      all variants that passed. Sorted by acquisition_score descending.
+
+  - name: n_feasible
+    type: int
+    description: Number of variants that passed all checks.
+
+  - name: liability_report
+    type: json
+    description: >
+      Per-variant full report: {vh_seq: {passed, n_liabilities, liabilities: [
+        {check, severity, sequence, position, description, citation}
+      ]}}. Useful for debugging and logging in loop_history.
+
+  - name: result
+    type: json
+    description: >
+      Combined output for loop_end wiring — contains feasible_variants,
+      n_feasible, and liability_report in one dict.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 30

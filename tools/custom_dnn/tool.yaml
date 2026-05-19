@@ -1,49 +1,88 @@
 id: custom_dnn
 name: Custom DNN
-version: "0.1"
+version: "0.4"
 category: toolbox
-wip: true
+wip: false
 description: >
   Design and train a custom deep neural network for bio-property prediction.
-  Supports MLP, Transformer, and CNN architectures over sequence or embedding inputs.
-  Configure architecture, training hyperparameters, and evaluation metrics.
+  Build the architecture visually in the DNN Designer, then connect sequences
+  and labels to train. Supports MLP, Transformer, CNN, RNN and mixed
+  architectures over any sequence embeddings (ESM-2, AbMAP, CHEAP, or cached).
   Outputs a trained model artifact and per-sample predictions.
+
+  COMMITTEE MODE (ML-Assisted Directed Evolution): set committee_mode=true to
+  switch to bootstrap ensemble training over AbMAP/pre-computed embeddings and
+  multi-rank docking scores. Outputs RCC acquisition scores
+  α = μ̄ + κ_epi·σ_epi − κ_conf·σ_conf, ready to wire into a loop_end node.
+  Identical to dnn_mlde but uses YOUR visual architecture instead of the built-in MLP.
 
 inputs:
   - name: sequences
     type: fasta
-    required: true
+    required: false
     default: ""
-    description: Input sequences for training or inference (FASTA format).
+    description: >
+      Input sequences (FASTA). Required when embedding_input is not connected.
+      When embedding_input is provided, sequences is used only to identify sample IDs.
+
+  - name: embedding_input
+    type: json
+    required: false
+    default: null
+    description: >
+      Pre-computed embeddings — wire AbMAP, ESM Embedding, or CHEAP output here.
+      Accepts {seq_name: [float, ...]}, a flat [float...] vector, or a batch
+      [[float...], ...] list. Embedding dim must match Input layer features.
+      When connected, the embedding_model param is ignored.
+
+  - name: embedding_input_2
+    type: json
+    required: false
+    default: null
+    description: >
+      Second embedding source to concatenate with embedding_input.
+      Wire a different model (e.g. AbMAP 512d + ESM 320d → 832d combined).
+      Set Input layer features = dim1 + dim2 in the DNN Designer.
 
   - name: labels
     type: json
     required: false
     default: null
     description: >
-      Training labels as JSON array or {id: label} dict.
+      Training labels as "{id: label}" dict or flat array.
       Omit at inference time (model_artifact required instead).
 
   - name: model_artifact
-    type: json
+    type: model
     required: false
     default: null
     description: >
-      Pre-trained model artifact (from a previous Custom DNN run). If provided,
-      skips training and runs inference only.
+      Pre-trained model from the model registry. If provided, skips training
+      and runs inference only. Connect a previous Custom DNN output or pick
+      from the registry using the model picker.
 
-  - name: architecture
-    type: str
-    required: false
-    default: "mlp"
-    description: "Architecture type: mlp | transformer | cnn"
-
-  - name: hidden_dims
-    type: str
-    required: false
-    default: "256 128 64"
+  - name: architecture_spec
+    type: json
+    required: true
+    default: null
     description: >
-      Space-separated hidden layer widths. E.g. '512 256 128' for a 3-layer MLP.
+      Visual architecture specification produced by the DNN Designer.
+      JSON with version, nodes (layerType + params) and edges.
+      Open the DNN Designer via the "Design Architecture" button to create one.
+
+  - name: embedding_model
+    type: str
+    required: false
+    default: "8M"
+    options:
+      - "8M"
+      - "35M"
+      - "150M"
+      - "650M"
+    description: >
+      ESM-2 model size used when embedding_input is not connected.
+      8M=320-dim (fastest), 35M=480-dim, 150M=640-dim, 650M=1280-dim (best).
+      Match Input layer features in the DNN Designer to this dimension.
 
   - name: epochs
     type: int
@@ -61,26 +100,152 @@ inputs:
     type: str
     required: false
     default: "regression"
-    description: "regression | binary_classification | multiclass"
+    options:
+      - "regression"
+      - "binary_classification"
+      - "multiclass"
+    description: "Training task type."
+
+  - name: loss_fn
+    type: str
+    required: false
+    default: "auto"
+    options:
+      - "auto"
+      - "mse"
+      - "huber"
+      - "mae"
+      - "bce"
+      - "focal"
+      - "cross_entropy"
+      - "label_smoothing"
+    description: >
+      Loss function. auto = MSELoss for regression, BCEWithLogits for binary,
+      CrossEntropy for multiclass. Options: mse, huber (robust to outliers),
+      mae, bce, focal (imbalanced classes), cross_entropy, label_smoothing.
 
   - name: num_classes
     type: int
     required: false
     default: 2
-    description: "Number of classes (multiclass only)."
+    description: "Number of output classes (multiclass only)."
+
+  # ── Committee / ML-DE mode inputs ──────────────────────────────────────────
+  - name: committee_mode
+    type: bool
+    required: false
+    default: false
+    description: >
+      Enable bootstrap committee ensemble mode for ML-Assisted Directed Evolution.
+      When true, trains M independent DynamicDNN members via bootstrap resampling
+      (one committee per rank) and scores candidates with the RCC acquisition
+      function. All other committee inputs below become active.
+
+  - name: embeddings
+    type: json
+    required: false
+    default: null
+    description: >
+      Training embeddings for committee mode — {seq_id: [float, ...]} (AbMAP 512d).
+      Wire from AbMAP embedding output for the current antibody sequence.
+
+  - name: candidate_embeddings
+    type: json
+    required: false
+    default: null
+    description: >
+      Embeddings for new candidate sequences to score — same format as embeddings.
+      Wire from AbMAP candidate_embeddings output (e.g. after cdr_mutator variants).
+
+  - name: scores_rank_1
+    type: json
+    required: false
+    default: null
+    description: "Rank-1 property scores for training — {seq_id: float}. Lower is better for HADDOCK."
+
+  - name: scores_rank_2
+    type: json
+    required: false
+    default: null
+    description: "Rank-2 scores (optional second docking pose/replica)."
+
+  - name: scores_rank_3
+    type: json
+    required: false
+    default: null
+    description: "Rank-3 scores (optional)."
+
+  - name: scores_rank_4
+    type: json
+    required: false
+    default: null
+    description: "Rank-4 scores (optional)."
+
+  - name: accumulated_dataset
+    type: json
+    required: false
+    default: null
+    description: >
+      Accumulated data from all previous loop iterations. Injected automatically
+      by the loop executor — do not wire manually.
+      Format: {"embeddings": {seq_id: [float]}, "scores_rank_1": {seq_id: float}, ...}
+
+  - name: n_committee
+    type: int
+    required: false
+    default: 5
+    description: "Number of bootstrap committee members (committee_mode only)."
+
+  - name: kappa_epi
+    type: float
+    required: false
+    default: 2.0
+    description: "Epistemic uncertainty weight in acquisition α = μ̄ + κ_epi·σ_epi − κ_conf·σ_conf."
+
+  - name: kappa_conf
+    type: float
+    required: false
+    default: 0.5
+    description: "Conformational uncertainty penalty in acquisition function."
+
+  - name: lower_is_better
+    type: bool
+    required: false
+    default: true
+    description: "Flip scores before training so the model maximises acquisition (true for HADDOCK, false for affinity)."
+
+  - name: top_k
+    type: int
+    required: false
+    default: 20
+    description: "Number of top candidates to return in top_sequences (committee_mode only)."
+
+  - name: batch_size
+    type: int
+    required: false
+    default: 128
+    description: "Mini-batch size for committee member training."
 
 outputs:
   - name: model_artifact
     type: json
-    description: "Trained model weights and config (pass to downstream DNN nodes)."
+    description: "Trained model weights and config (pass to downstream Custom DNN for inference)."
 
   - name: predictions
     type: json
-    description: "Per-sequence predictions with confidence scores."
+    description: "Per-sequence predictions with scores."
 
   - name: metrics
     type: json
-    description: "Training/eval metrics: loss, RMSE/AUC, per-epoch curves."
+    description: "Training/eval metrics: loss curves, RMSE/AUC per epoch."
+
+  - name: acquisition_scores
+    type: json
+    description: "RCC acquisition scores α per candidate — {seq_id: float}. committee_mode only."
+
+  - name: top_sequences
+    type: json
+    description: "Top-k candidate seq_ids sorted by acquisition score. committee_mode only."
 
 runtime:
   kind: local_python

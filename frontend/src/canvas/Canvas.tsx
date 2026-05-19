@@ -10,7 +10,7 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 
 import { useCanvasStore } from "./store";
-import { ToolNode, SequenceInputNode, SequenceDbNode, TargetInputNode, ImmuneBuilderNode, MegaDockNode, HADDOCK3Node, EquiDockNode, SuperWaterNode, ComputeNode, CDRMutatorNode } from "./NodeRenderer";
+import { ToolNode, SequenceInputNode, SequenceDbNode, TargetInputNode, ImmuneBuilderNode, MegaDockNode, HADDOCK3Node, EquiDockNode, SuperWaterNode, ComputeNode, CDRMutatorNode, AbMAPNode, IgLMNode, ProGen2Node, LoopStartNode, LoopEndNode } from "./NodeRenderer";
 import type { ToolSpec } from "@/types";
 
 const NODE_TYPES = {
@@ -25,6 +25,11 @@ const NODE_TYPES = {
   superWaterNode: SuperWaterNode,
   computeNode:    ComputeNode,
   cdrMutatorNode: CDRMutatorNode,
+  abmapNode:      AbMAPNode,
+  iglmNode:       IgLMNode,
+  progen2Node:    ProGen2Node,
+  loopStartNode:  LoopStartNode,
+  loopEndNode:    LoopEndNode,
 };
 
 interface CanvasProps {
@@ -124,6 +129,8 @@ export function Canvas({ onNodeClick }: CanvasProps) {
               docking: "#f97316",
               molecular_dynamics: "#2dd4bf",
               toolbox: "#d946ef",
+              mutagenesis: "#f59e0b",
+              bioinformatics: "#2dd4bf",
               debug: "#6b7280",
             };
             return colors[category] ?? "#6b7280";

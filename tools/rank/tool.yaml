@@ -1,0 +1,63 @@
+id: rank
+name: Rank
+version: "1.0"
+category: design
+description: >
+  Sort sequences by score and annotate each with its rank.
+  Upstream outputs are injected as named Python variables (same as Compute).
+  Outputs an ordered multi-FASTA (best first or last) and a ranked JSON list.
+
+inputs:
+  - name: score_var
+    type: str
+    required: false
+    default: ""
+    description: >
+      Name of the upstream variable holding a {name: score} dict.
+
+  - name: sequence_var
+    type: str
+    required: false
+    default: ""
+    description: >
+      Name of the upstream variable holding a multi-FASTA string.
+
+  - name: order
+    type: str
+    required: false
+    default: descending
+    options: [descending, ascending]
+    description: "Sort order — descending = highest score first"
+
+  - name: top_k
+    type: int
+    required: false
+    default: 0
+    description: "Keep only top K sequences. 0 = keep all."
+
+  - name: code
+    type: python_code
+    required: false
+    default: |
+      # All upstream outputs are available as variables.
+      # Set result to a list of dicts [{name, score}] or [{name, score, sequence}].
+      result = None
+    description: "Custom ranking code — overrides auto sort when set"
+
+outputs:
+  - name: sequences
+    type: str
+    description: "Multi-FASTA sorted by rank (best first)"
+
+  - name: ranking
+    type: json
+    description: "[{rank, name, sequence, score}] sorted list"
+
+  - name: scores
+    type: json
+    description: "{name: score} dict preserving sort order"
+
+runtime:
+  kind: local_python
+  timeout_seconds: 120
+  gpu: false

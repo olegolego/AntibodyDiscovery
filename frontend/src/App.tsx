@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Canvas } from "./canvas/Canvas";
 import { ParamPanel } from "./canvas/ParamPanel";
 import { Palette } from "./palette/Palette";
@@ -7,17 +7,21 @@ import { RunPanel } from "./runs/RunPanel";
 import { RunsPage } from "./runs/RunsPage";
 import { RunReport } from "./runs/RunReport";
 import { AnalysisPanel } from "./analysis/AnalysisPanel";
+import { MLAnalysisPage } from "./analysis/MLAnalysisPage";
 import { Playground } from "./playground/Playground";
 import { WorkshopPage } from "./workshop/WorkshopPage";
 import { ResultsPage } from "./results/ResultsPage";
 import { DatasetPage } from "./datasets/DatasetPage";
 import { TerminalPage } from "./terminal/TerminalPage";
+import { DNNDesignerPage } from "./dnn_designer/DNNDesignerPage";
 import { submitRun } from "./api/runs";
-import { cancelLoopRun, getLoopRun, type LoopRun } from "./api/loopRuns";
+import { getLoopRun, type LoopRun } from "./api/loopRuns";
 import { useCanvasStore } from "./canvas/store";
 import { useTools } from "./api/tools";
 import { randomUUID } from "./utils";
 import type { Pipeline, Run } from "./types";
+import type { ArchitectureSpec } from "./dnn_designer/store";
+import type { DNNContext } from "./canvas/ParamPanel";
 
 const RUN_KEY = "pdp_last_run_id";
 const PIPELINE_ID_KEY = "pdp_pipeline_id";
@@ -39,26 +43,63 @@ export default function App() {
   const [loopRunning, setLoopRunning] = useState(false);
   const [loopData, setLoopData] = useState<LoopRun | null>(null);
   const [analysis, setAnalysis] = useState<{ runId: string; nodeId: string } | null>(null);
-  const [page, setPage] = useState<"canvas" | "playground" | "workshop" | "results" | "library" | "terminal" | "runs" | "report">("canvas");
+  const [page, setPage] = useState<"canvas" | "playground" | "workshop" | "results" | "library" | "terminal" | "runs" | "report" | "dnn_designer" | "ml_analysis">("canvas");
+  const [dnnDesignerNodeId, setDnnDesignerNodeId] = useState<string | null>(null);
+  const [dnnDesignerSpec, setDnnDesignerSpec] = useState<ArchitectureSpec | null>(null);
+  const [dnnDesignerContext, setDnnDesignerContext] = useState<DNNContext | null>(null);
   const [reportRunId, setReportRunId] = useState<string | null>(null);
 
   const toPipeline = useCanvasStore((s) => s.toPipeline);
   const loadPipeline = useCanvasStore((s) => s.loadPipeline);
   const selectedNodeId = useCanvasStore((s) => s.selectedNodeId);
   const clearRunStatuses = useCanvasStore((s) => s.clearRunStatuses);
+  const updateNodeParams = useCanvasStore((s) => s.updateNodeParams);
+  const nodes = useCanvasStore((s) => s.nodes);
   const { data: tools } = useTools();
+  const _didSyncPipeline = useRef(false);
+
+  // On startup, reload canvas from the DB copy of the current pipeline so that
+  // any server-side fixes (e.g. corrected edges) are reflected immediately,
+  // rather than serving the potentially stale localStorage-persisted canvas.
+  // Retries every 2 s until the backend is reachable.
+  useEffect(() => {
+    if (_didSyncPipeline.current || !tools?.length || !pipelineId) return;
+    let cancelled = false;
+    async function trySync() {
+      while (!cancelled) {
+        try {
+          const r = await fetch("/api/pipelines/");
+          if (!r.ok) throw new Error("not ok");
+          const pipelines: Pipeline[] = await r.json();
+          const saved = pipelines.find((p) => p.id === pipelineId);
+          if (saved) {
+            loadPipeline(saved, tools!);
+            setPipelineName(saved.name ?? "Untitled pipeline");
+          }
+          _didSyncPipeline.current = true;
+          return;
+        } catch {
+          await new Promise((res) => setTimeout(res, 2000));
+        }
+      }
+    }
+    trySync();
+    return () => { cancelled = true; };
+  }, [tools, pipelineId]);
 
   async function handleRun() {
     setRunning(true);
     clearRunStatuses();
     // Cancel any in-progress run or loop before starting fresh
     if (loopRunId) {
-      cancelLoopRun(loopRunId).catch(() => {});
+      (loopData?.run_ids ?? [runId].filter(Boolean)).forEach((id) =>
+        fetch(`/api/runs/${id}/cancel/`, { method: "POST" }).catch(() => {})
+      );
       setLoopRunId(null);
       setLoopData(null);
       setLoopRunning(false);
     }
-    if (runId) {
+    if (runId && !loopRunId) {
       fetch(`/api/runs/${runId}/cancel/`, { method: "POST" }).catch(() => {});
       setRunId(null);
       localStorage.removeItem(RUN_KEY);
@@ -127,6 +168,24 @@ export default function App() {
     );
   }
 
+  if (page === "dnn_designer" && dnnDesignerNodeId) {
+    return (
+      <DNNDesignerPage
+        nodeId={dnnDesignerNodeId}
+        initialSpec={dnnDesignerSpec}
+        context={dnnDesignerContext ?? undefined}
+        onBack={() => setPage("canvas")}
+        onSave={(nId, spec) => {
+          updateNodeParams(nId, {
+            ...(nodes.find((n) => n.id === nId)?.data as { params: Record<string, unknown> })?.params ?? {},
+            architecture_spec: spec,
+          });
+          setPage("canvas");
+        }}
+      />
+    );
+  }
+
   if (page === "runs") {
     return (
       <RunsPage
@@ -140,6 +199,16 @@ export default function App() {
           localStorage.setItem(PIPELINE_ID_KEY, snapshot.id ?? run.pipeline_id);
           setRunId(run.id);
           localStorage.setItem(RUN_KEY, run.id);
+          // If this run belongs to a loop campaign, restore the loop panel
+          if (run.loop_id) {
+            setLoopRunId(run.loop_id);
+            setLoopRunning(run.status === "running");
+            getLoopRun(run.loop_id).then(setLoopData).catch(() => {});
+          } else {
+            setLoopRunId(null);
+            setLoopRunning(false);
+            setLoopData(null);
+          }
           setPage("canvas");
         }}
         onViewReport={(id) => {
@@ -184,6 +253,10 @@ export default function App() {
     return <TerminalPage onBack={() => setPage("canvas")} />;
   }
 
+  if (page === "ml_analysis") {
+    return <MLAnalysisPage onBack={() => setPage("canvas")} />;
+  }
+
 return (
     <div className="flex flex-col h-screen overflow-hidden bg-canvas">
       <PipelineBar
@@ -199,6 +272,7 @@ return (
         onOpenLibrary={() => setPage("library")}
         onOpenTerminal={() => setPage("terminal")}
         onOpenRuns={() => setPage("runs")}
+        onOpenMLAnalysis={() => setPage("ml_analysis")}
         onNewPipeline={() => { setRunId(null); localStorage.removeItem("pdp_last_run_id"); }}
         onPipelineIdChange={(id) => {
           setPipelineId(id);
@@ -213,7 +287,16 @@ return (
           <Canvas onNodeClick={() => {}} />
         </div>
 
-        {selectedNodeId && <ParamPanel />}
+        {selectedNodeId && (
+          <ParamPanel
+            onOpenDNNDesigner={(nId, spec, ctx) => {
+              setDnnDesignerNodeId(nId);
+              setDnnDesignerSpec(spec);
+              setDnnDesignerContext(ctx);
+              setPage("dnn_designer");
+            }}
+          />
+        )}
 
         {(runId || loopRunId) && (
           <div className="w-80 shrink-0 border-l border-border bg-surface overflow-hidden flex flex-col">
@@ -222,7 +305,6 @@ return (
               loopRunId={loopRunId}
               loopData={loopData}
               onSelectIteration={(id) => { setRunId(id); localStorage.setItem(RUN_KEY, id); }}
-              onCancelLoop={() => { if (loopRunId) { cancelLoopRun(loopRunId).catch(() => {}); setLoopRunning(false); } }}
               onClose={() => { setRunId(null); setLoopRunId(null); setLoopData(null); setLoopRunning(false); localStorage.removeItem(RUN_KEY); }}
               onOpenAnalysis={(rId, nId) => setAnalysis({ runId: rId, nodeId: nId })}
               onViewReport={(id) => { setReportRunId(id); setPage("report"); }}

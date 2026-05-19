@@ -1,0 +1,42 @@
+id: liability_scanner
+name: Liability Scanner
+version: "1.0.0"
+category: bioinformatics
+description: >
+  Scans VH and VL sequences for developability liability motifs.
+  Covers N-glycosylation, deamidation, isomerization, oxidation,
+  unpaired cysteines, DP cleavage, RGD integrin-binding, and lysine
+  glycation sites. Based on Jain 2017 (PNAS) and Raybould 2019 (TAP)
+  motif sets. Pure Python — no GPU, runs in under 1 second.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: true
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS"
+    description: "VH amino-acid sequence (single-letter, no header)."
+  - name: light_chain
+    type: fasta
+    required: false
+    default: "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+    description: "VL amino-acid sequence. Optional."
+
+outputs:
+  - name: hits
+    type: json
+    description: >
+      List of {chain, motif, start, end, sequence, description} dicts,
+      one entry per motif match found.
+  - name: summary
+    type: json
+    description: >
+      Dict with total hit count and per-motif-type counts,
+      e.g. {"total": 3, "N-glycosylation": 1, "Deamidation": 2}.
+  - name: n_liabilities
+    type: int
+    description: Total number of liability hits across both chains.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 30

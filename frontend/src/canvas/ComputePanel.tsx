@@ -22,7 +22,17 @@ const TYPE_STYLE: Record<string, { label: string; cls: string }> = {
   float:        { label: "float",   cls: "text-violet-400 bg-violet-950/60 border-violet-800/40" },
   bool:         { label: "bool",    cls: "text-slate-400  bg-slate-800/60  border-slate-700/40"  },
   python_code:  { label: "code",    cls: "text-indigo-400 bg-indigo-950/60 border-indigo-800/40" },
+  dataset:      { label: "dataset", cls: "text-amber-400  bg-amber-950/60  border-amber-800/40"  },
+  model:        { label: "model",   cls: "text-indigo-400 bg-indigo-950/60 border-indigo-800/40" },
 };
+
+interface _DatasetCol { id: string; name: string; type: string }
+interface _DatasetInfo {
+  name?: string;
+  entry_count?: number;
+  sequence_count?: number;
+  columns?: _DatasetCol[];
+}
 
 function TypeBadge({ type }: { type: string }) {
   const style = TYPE_STYLE[type.toLowerCase()] ?? {
@@ -81,10 +91,34 @@ function ComputePanelInner({
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
 
+  // Dataset schema cache: srcId → metadata fetched from /api/datasets/{id}
+  const [datasetSchemas, setDatasetSchemas] = useState<Record<string, _DatasetInfo>>({});
+
+  useEffect(() => {
+    const connectedSourceIds = [...new Set(
+      edges.filter((e) => e.target === node.id).map((e) => e.source)
+    )];
+    for (const srcId of connectedSourceIds) {
+      const srcNode = nodes.find((n) => n.id === srcId);
+      const srcData = srcNode?.data as NodeData | undefined;
+      if (srcData?.tool?.id !== "dataset") continue;
+      const datasetId = String(srcData.params?.dataset_id ?? "");
+      if (!datasetId || datasetSchemas[srcId]) continue;
+      fetch(`/api/datasets/${datasetId}/`)
+        .then((r) => r.ok ? r.json() : null)
+        .then((ds: _DatasetInfo | null) => {
+          if (ds) setDatasetSchemas((prev) => ({ ...prev, [srcId]: ds }));
+        })
+        .catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edges, nodes, node.id]);
+
   // Build variable list: each var is prefixed with the source node ID.
+  // For dataset nodes, enrich with schema metadata (columns, entry count).
   // e.g. ablang_1_embedding, ablang_2_embedding — always unique, always traceable.
   const incomingVars = (() => {
-    const vars: { varName: string; type: string; sourceNodeName: string }[] = [];
+    const vars: { varName: string; type: string; sourceNodeName: string; description: string }[] = [];
     const connectedSourceIds = [...new Set(
       edges.filter((e) => e.target === node.id).map((e) => e.source)
     )];
@@ -92,11 +126,34 @@ function ComputePanelInner({
       const srcNode = nodes.find((n) => n.id === srcId);
       const srcTool = (srcNode?.data as NodeData | undefined)?.tool;
       if (!srcTool) continue;
+
+      // Resolve dataset schema: prefer runtime output, fall back to pre-fetched
+      const runtimeInfo = runNodeOutputs[srcId]?.info as _DatasetInfo | undefined;
+      const dsInfo: _DatasetInfo | undefined =
+        srcTool.id === "dataset" ? (runtimeInfo ?? datasetSchemas[srcId]) : undefined;
+
       for (const port of srcTool.outputs) {
+        let description = "";
+        if (srcTool.id === "dataset" && dsInfo) {
+          const colStr = dsInfo.columns?.map((c) => `${c.name} (${c.type})`).join(", ");
+          if (port.name === "sequences") {
+            const n = dsInfo.sequence_count ?? dsInfo.entry_count;
+            description = `${n ?? "?"} FASTA sequences — full data in Python, schema only to AI`;
+          } else if (port.name === "info") {
+            description = [
+              dsInfo.name ? `"${dsInfo.name}"` : null,
+              dsInfo.entry_count != null ? `${dsInfo.entry_count} entries` : null,
+              colStr ? `columns: ${colStr}` : null,
+            ].filter(Boolean).join(" · ");
+          } else if (port.name === "labels") {
+            description = `{seq_name: value} dict — ${dsInfo.entry_count ?? "?"} entries`;
+          }
+        }
         vars.push({
           varName: `${srcId}_${port.name}`,
           type: port.type,
           sourceNodeName: srcTool.name,
+          description,
         });
       }
     }
@@ -135,7 +192,7 @@ function ComputePanelInner({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           prompt: aiPrompt,
-          variables: incomingVars.map((v) => ({ name: v.varName, type: v.type })),
+          variables: incomingVars.map((v) => ({ name: v.varName, type: v.type, description: v.description })),
         }),
       });
       if (!resp.ok) {
@@ -232,17 +289,22 @@ function ComputePanelInner({
             Available variables
           </div>
           {incomingVars.length > 0 ? (
-            <div className="flex flex-wrap gap-1.5">
-              {incomingVars.map(({ varName, type, sourceNodeName }) => (
-                <span
+            <div className="flex flex-col gap-1.5">
+              {incomingVars.map(({ varName, type, sourceNodeName, description }) => (
+                <div
                   key={varName}
                   title={`from ${sourceNodeName}`}
-                  className="inline-flex items-center gap-1.5 pl-2 pr-1.5 py-0.5 rounded-md
-                    bg-indigo-950/60 border border-indigo-700/40 cursor-default"
+                  className="flex flex-col gap-0.5"
                 >
-                  <span className="text-xs font-mono text-indigo-300">{varName}</span>
-                  <TypeBadge type={type} />
-                </span>
+                  <span className="inline-flex items-center gap-1.5 pl-2 pr-1.5 py-0.5 rounded-md
+                    bg-indigo-950/60 border border-indigo-700/40 cursor-default w-fit">
+                    <span className="text-xs font-mono text-indigo-300">{varName}</span>
+                    <TypeBadge type={type} />
+                  </span>
+                  {description && (
+                    <span className="text-[10px] text-slate-500 pl-2 leading-snug">{description}</span>
+                  )}
+                </div>
               ))}
             </div>
           ) : (

@@ -44,14 +44,15 @@ def _persist_subprocess_result(
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 TOOLS_DIR = _REPO_ROOT / "tools"
 
-# run_id -> active asyncio Process (for cancellation)
-_active_procs: dict[str, asyncio.subprocess.Process] = {}
+# run_id -> set of active asyncio Processes (for cancellation)
+# Using a set supports multiple parallel nodes within the same run.
+_active_procs: dict[str, set] = {}
 
 
 def kill_subprocess(run_id: str) -> None:
-    """Kill the active subprocess for a run, if any."""
-    proc = _active_procs.pop(run_id, None)
-    if proc is not None:
+    """Kill all active subprocesses for a run."""
+    procs = _active_procs.pop(run_id, set())
+    for proc in procs:
         try:
             proc.kill()
         except Exception:
@@ -100,7 +101,7 @@ async def run_tool_subprocess(
     )
 
     if run_id is not None:
-        _active_procs[run_id] = proc
+        _active_procs.setdefault(run_id, set()).add(proc)
 
     stdin_bytes = json.dumps(inputs).encode()
     proc.stdin.write(stdin_bytes)
@@ -137,7 +138,11 @@ async def run_tool_subprocess(
         raise
     finally:
         if run_id is not None:
-            _active_procs.pop(run_id, None)
+            procs = _active_procs.get(run_id)
+            if procs is not None:
+                procs.discard(proc)
+                if not procs:
+                    _active_procs.pop(run_id, None)
 
     await proc.wait()
 

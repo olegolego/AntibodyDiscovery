@@ -1,0 +1,46 @@
+id: loop_end
+name: Loop End
+version: "1.0"
+category: control_flow
+description: >
+  Marks the end of the loop region. Write Python code that inspects all upstream
+  outputs and sets next_heavy_chain / next_light_chain for the next iteration.
+  All upstream node outputs are available as <node_id>_<key> variables, along
+  with loop_history (list of previous iteration results) and loop_iteration
+  (current 0-based index).
+
+inputs:
+  - name: code
+    type: python_code
+    required: true
+    default: |
+      # All upstream outputs available as <node_id>_<key> variables.
+      # loop_history: list of dicts from previous iterations.
+      # loop_iteration: current 0-based iteration index.
+
+      if not loop_history:
+          # First iteration — pass through unchanged
+          next_heavy_chain = heavy_chain if 'heavy_chain' in dir() else None
+          next_light_chain = light_chain if 'light_chain' in dir() else None
+      else:
+          best = min(loop_history, key=lambda r: r.get("haddock_score", 0))
+          next_heavy_chain = best.get("vh", heavy_chain if 'heavy_chain' in dir() else None)
+          next_light_chain = best.get("vl")
+
+      result = {
+          "next_heavy_chain": next_heavy_chain,
+          "next_light_chain": next_light_chain,
+      }
+
+outputs:
+  - name: next_heavy_chain
+    type: string
+    required: false
+  - name: next_light_chain
+    type: string
+    required: false
+
+runtime:
+  kind: local_python
+  timeout_seconds: 120
+  gpu: false

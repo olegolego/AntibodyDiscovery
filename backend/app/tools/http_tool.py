@@ -7,6 +7,7 @@ Wraps httpx with:
 """
 import asyncio
 import logging
+import time
 from collections.abc import Callable, Awaitable
 from typing import Any
 
@@ -17,6 +18,7 @@ log = logging.getLogger(__name__)
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _MAX_RETRIES = 3
 _BASE_DELAY = 2.0   # seconds; doubles each attempt
+_HEARTBEAT_INTERVAL = 15.0  # log "still running…" every N seconds during HTTP wait
 
 
 async def _health_check(client: httpx.AsyncClient, base_url: str, tool_name: str) -> None:
@@ -65,7 +67,19 @@ async def post_with_retry(
         last_exc: Exception | None = None
         for attempt in range(1, _MAX_RETRIES + 1):
             try:
-                resp = await client.post(f"{base_url}{path}", json=payload)
+                # Run the HTTP request as a task so we can emit heartbeat logs
+                # while the server is processing (long-running tools stay visible).
+                _task = asyncio.create_task(
+                    client.post(f"{base_url}{path}", json=payload)
+                )
+                _t0 = time.monotonic()
+                while not _task.done():
+                    try:
+                        await asyncio.wait_for(asyncio.shield(_task), timeout=_HEARTBEAT_INTERVAL)
+                    except asyncio.TimeoutError:
+                        elapsed = time.monotonic() - _t0
+                        await _log(f"{tool_name} processing… ({elapsed:.0f}s elapsed)")
+                resp = _task.result()
 
                 if resp.status_code in _RETRYABLE_STATUS and attempt < _MAX_RETRIES:
                     delay = _BASE_DELAY * (2 ** (attempt - 1))

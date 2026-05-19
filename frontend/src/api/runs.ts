@@ -12,6 +12,11 @@ export async function listRuns(): Promise<Run[]> {
   return Array.isArray(data) ? data : [];
 }
 
+export async function getRun(runId: string): Promise<Run> {
+  const { data } = await api.get<Run>(`/runs/${runId}/`);
+  return data;
+}
+
 export async function rerunRun(runId: string): Promise<Run> {
   const { data } = await api.post<Run>(`/runs/${runId}/rerun/`);
   return data;

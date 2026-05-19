@@ -7,6 +7,7 @@ from app.tools.base import RunContext
 _ADAPTER_MAP = {
     "sequence_input": ("app.tools.adapters.echo", "EchoAdapter"),
     "sequence_db":    ("app.tools.adapters.sequence_db", "SequenceDbAdapter"),
+    "dataset":        ("app.tools.adapters.dataset_tool", "DatasetToolAdapter"),
     "target_input": ("app.tools.adapters.echo", "EchoAdapter"),
     "echo": ("app.tools.adapters.echo", "EchoAdapter"),
     "immunebuilder": ("app.tools.adapters.immunebuilder", "ImmuneBuilderAdapter"),
@@ -26,12 +27,27 @@ _ADAPTER_MAP = {
     "superwater":        ("app.tools.adapters.superwater","SuperWaterAdapter"),
     "compute":           ("app.tools.adapters.compute",   "ComputeAdapter"),
     "loop":              ("app.tools.adapters.loop",      "LoopAdapter"),
-    "custom_dnn":        ("app.tools.adapters.toolbox",   "ToolboxAdapter"),
+    "loop_start":        ("app.tools.adapters.loop_start", "LoopStartAdapter"),
+    "loop_end":          ("app.tools.adapters.loop_end",   "LoopEndAdapter"),
+    "custom_dnn":        ("app.tools.adapters.custom_dnn", "CustomDNNAdapter"),
     "diffusion_design":  ("app.tools.adapters.toolbox",   "ToolboxAdapter"),
     "property_predictor":("app.tools.adapters.toolbox",   "ToolboxAdapter"),
     "cdr_mutator":       ("app.tools.adapters.cdr_mutator", "CDRMutatorAdapter"),
     "esm_embedding":     ("app.tools.adapters.esm_embedding",  "ESMEmbeddingAdapter"),
     "cheap_embedding":   ("app.tools.adapters.cheap_embedding", "CHEAPEmbeddingAdapter"),
+    "iglm":              ("app.tools.adapters.iglm",            "IgLMAdapter"),
+    "progen2":           ("app.tools.adapters.progen2",         "ProGen2Adapter"),
+    "liability_scanner": ("app.tools.adapters.liability_scanner", "LiabilityScannerAdapter"),
+    "deepsp":            ("app.tools.adapters.deepsp",            "DeepSPAdapter"),
+    "netsolp":           ("app.tools.adapters.netsolp",           "NetSolPAdapter"),
+    "rcc_mlde":          ("app.tools.adapters.rcc_mlde",          "RCCMLDEAdapter"),
+    "dnn_mlde":          ("app.tools.adapters.dnn_mlde",          "DNNMLDEAdapter"),
+    "developability_filter": ("app.tools.adapters.developability_filter", "DevelopabilityFilterAdapter"),
+    # design operations
+    "choose":            ("app.tools.adapters.choose",            "ChooseAdapter"),
+    "filter":            ("app.tools.adapters.filter_op",         "FilterAdapter"),
+    "rank":              ("app.tools.adapters.rank_op",           "RankAdapter"),
+    "evaluate":          ("app.tools.adapters.evaluate_op",       "EvaluateAdapter"),
 }
 
 

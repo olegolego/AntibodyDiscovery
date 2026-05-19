@@ -1,0 +1,57 @@
+id: dataset
+name: Dataset
+version: "1.1"
+category: input
+description: >
+  Load sequences from a saved dataset and connect them to any downstream
+  tool — just like Sequence Input, but for batches. Outputs heavy_chain
+  and light_chain as FASTA so you can wire directly to AbMAP, ESM
+  embedding, DNN training, or any other tool that accepts sequences.
+
+inputs:
+  - name: dataset_id
+    type: dataset
+    required: true
+    default: ""
+    description: Select a dataset from your library.
+
+  - name: vh_column
+    type: str
+    required: false
+    default: "heavy_chain"
+    description: Which column contains the VH (heavy chain) sequences.
+
+  - name: vl_column
+    type: str
+    required: false
+    default: "light_chain"
+    description: Which column contains the VL (light chain) sequences. Leave empty to omit VL.
+
+  - name: label_column
+    type: str
+    required: false
+    default: ""
+    description: >
+      Column to use as training labels for DNN. Leave empty for inference-only use.
+
+outputs:
+  - name: heavy_chain
+    type: fasta
+    description: FASTA of all VH sequences from the selected column.
+
+  - name: light_chain
+    type: fasta
+    description: FASTA of all VL sequences from the selected column. Empty string if vl_column not set.
+
+  - name: labels
+    type: json
+    description: "Labels as {name: value} dict. Empty if label_column not set."
+
+  - name: info
+    type: json
+    description: Dataset metadata — name, entry count, column definitions, label column type.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 30

@@ -1,9 +1,10 @@
 import { useRef, useState } from "react";
 import { Handle, Position, type NodeProps } from "reactflow";
-import { BookOpen, Code2 } from "lucide-react";
+import { BookOpen, Code2, Layers } from "lucide-react";
 import { useCanvasStore, type NodeData } from "./store";
 import { SequencePickerModal } from "@/sequences/SequencePickerModal";
 import type { DatasetEntry } from "@/api/datasets";
+import type { ArchitectureSpec } from "@/dnn_designer/store";
 
 const CATEGORY_STYLE: Record<string, { border: string; label: string; glow: string }> = {
   input:                { border: "#fbbf24", label: "text-amber-300",   glow: "rgba(251,191,36,0.25)"  },
@@ -15,22 +16,29 @@ const CATEGORY_STYLE: Record<string, { border: string; label: string; glow: stri
   toolbox:              { border: "#e879f9", label: "text-fuchsia-300", glow: "rgba(232,121,249,0.2)"  },
   compute:              { border: "#818cf8", label: "text-indigo-300",  glow: "rgba(129,140,248,0.2)"  },
   mutagenesis:          { border: "#f59e0b", label: "text-amber-300",   glow: "rgba(245,158,11,0.25)"  },
+  bioinformatics:       { border: "#2dd4bf", label: "text-teal-300",    glow: "rgba(45,212,191,0.2)"   },
+  control_flow:         { border: "#06b6d4", label: "text-cyan-300",    glow: "rgba(6,182,212,0.25)"   },
   debug:                { border: "#94a3b8", label: "text-slate-400",   glow: "rgba(148,163,184,0.15)" },
 };
 
 const STATUS_RING: Record<string, string> = {
-  queued:    "ring-2 ring-yellow-400/70",
-  running:   "ring-2 ring-blue-400/80 animate-pulse",
-  succeeded: "ring-2 ring-emerald-400/80",
-  failed:    "ring-2 ring-red-500/80",
-  skipped:   "ring-1 ring-slate-500/60",
+  queued:     "ring-2 ring-yellow-400/70",
+  running:    "ring-2 ring-blue-400/80 animate-pulse",
+  cancelling: "ring-2 ring-orange-400/80 animate-pulse",
+  cancelled:  "ring-2 ring-orange-400/50",
+  succeeded:  "ring-2 ring-emerald-400/80",
+  failed:     "ring-2 ring-red-500/80",
+  skipped:    "ring-1 ring-slate-500/60",
 };
 
 const STATUS_DOT: Record<string, string> = {
-  queued:    "bg-yellow-400",
-  running:   "bg-blue-400 animate-pulse",
-  succeeded: "bg-emerald-400",
-  failed:    "bg-red-500",
+  queued:     "bg-yellow-400",
+  running:    "bg-blue-400 animate-pulse",
+  cancelling: "bg-orange-400 animate-pulse",
+  cancelled:  "bg-orange-400/70",
+  succeeded:  "bg-emerald-400",
+  failed:     "bg-red-500",
+  skipped:    "bg-slate-500",
 };
 
 // ── Generic tool node ────────────────────────────────────────────────────────
@@ -73,6 +81,25 @@ export function ToolNode({ id, data, selected }: NodeProps<NodeData>) {
           <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
         )}
       </div>
+
+      {tool.id === "custom_dnn" && (() => {
+        const spec = data.params?.architecture_spec as ArchitectureSpec | undefined;
+        if (!spec?.nodes?.length) return null;
+        const types = [...new Set(spec.nodes.map((n) => n.type))];
+        const label = types.some((t) => t.includes("Transformer") || t.includes("Attention"))
+          ? "Transformer"
+          : types.some((t) => t === "LSTM" || t === "GRU")
+          ? "Recurrent"
+          : "MLP";
+        return (
+          <div className="flex items-center gap-1 mt-1.5 px-1.5 py-1 rounded bg-fuchsia-950/40 border border-fuchsia-900/50">
+            <Layers size={10} className="text-fuchsia-400 shrink-0" />
+            <span className="text-[10px] text-fuchsia-300">
+              {label} · {spec.nodes.length} layers
+            </span>
+          </div>
+        );
+      })()}
 
       {tool.outputs.length > 0 && (
         <Handle
@@ -708,7 +735,8 @@ export function TargetInputNode({ id, data, selected }: NodeProps<NodeData>) {
   const updateNodeParams = useCanvasStore((s) => s.updateNodeParams);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const target = String(data.params.target ?? "");
+  const rawTarget = String(data.params.target ?? "");
+  const target = rawTarget === "__large_omitted__" ? "" : rawTarget;
 
   function setTarget(value: string) {
     updateNodeParams(id, { ...data.params, target: value });
@@ -794,6 +822,129 @@ export function TargetInputNode({ id, data, selected }: NodeProps<NodeData>) {
 }
 
 // ── CDR Mutator node — N variant bundle output handles ───────────────────────
+
+const _IGLM_REGION_LABEL: Record<string, string> = {
+  cdr_h1: "CDR-H1", cdr_h2: "CDR-H2", cdr_h3: "CDR-H3",
+  cdr_l1: "CDR-L1", cdr_l2: "CDR-L2", cdr_l3: "CDR-L3",
+  custom:  "Custom",
+};
+
+const _IGLM_CHAIN_LABEL: Record<string, string> = {
+  vh: "VH", vl: "VL", both: "VH+VL",
+};
+
+export function IgLMNode({ id, data, selected }: NodeProps<NodeData>) {
+  const runStatus   = useCanvasStore((s) => s.runNodeStatuses[id]);
+  const nodeOutputs = useCanvasStore((s) => s.runNodeOutputs[id]);
+  const style       = CATEGORY_STYLE["sequence_design"];
+
+  const mode     = String(data.params.mode ?? "infill");
+  const redesign = String(data.params.redesign_chain ?? "vh");
+  const region   = String(data.params.infill_region  ?? "cdr_h3");
+  const numSeqs  = Math.max(1, Math.min(_MAX_VARIANT_HANDLES, Number(data.params.num_sequences ?? 5)));
+
+  const handles = mode === "log_likelihood"
+    ? []
+    : Array.from({ length: numSeqs }, (_, i) => ({
+        id:    `variant_${i + 1}`,
+        label: String(i + 1),
+        top:   `${10 + ((i + 0.5) / numSeqs) * 80}%`,
+      }));
+
+  const regionBadge = _IGLM_REGION_LABEL[region] ?? region;
+
+  const minH = mode === "log_likelihood" ? 90 : Math.max(110, numSeqs * 24 + 52);
+
+  return (
+    <div
+      style={{
+        borderColor: style.border,
+        minHeight:   minH,
+        boxShadow: selected
+          ? `0 0 0 2px ${style.border}99, 0 4px 28px ${style.glow}`
+          : `0 4px 20px ${style.glow}`,
+      }}
+      className={`relative bg-surface2 border-2 rounded-xl px-3.5 py-2.5 min-w-[192px]
+        transition-shadow ${runStatus ? STATUS_RING[runStatus] ?? "" : ""}`}
+    >
+      {/* Single input handle */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="in"
+        style={{ top: "50%", background: style.border }}
+        title="heavy_chain, light_chain"
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2 pr-7">
+        <div className="min-w-0">
+          <div className={`text-[10px] font-semibold uppercase tracking-wider mb-0.5 ${style.label}`}>
+            Sequence Design
+          </div>
+          <div className="text-sm font-bold text-white leading-tight">IgLM</div>
+        </div>
+        {runStatus && STATUS_DOT[runStatus] && (
+          <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
+        )}
+      </div>
+
+      {/* Mode + chain + region badges */}
+      <div className="mt-1.5 flex flex-col gap-0.5">
+        <span className="text-[10px] text-slate-400 leading-tight capitalize">{mode}</span>
+        {mode !== "log_likelihood" && (
+          <>
+            <span className="text-[10px] text-emerald-400 font-mono leading-tight">
+              {_IGLM_CHAIN_LABEL[redesign] ?? redesign}
+            </span>
+            <span className="text-[10px] text-amber-400 font-mono leading-tight">
+              {regionBadge}
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Variant number labels */}
+      {handles.length > 0 && (
+        <div className="absolute right-5 top-0 bottom-0 flex flex-col justify-around py-3 pointer-events-none">
+          {handles.map((h) => (
+            <span key={h.id} className="text-[9px] font-mono text-slate-500 text-right leading-none">
+              {h.label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Output handles */}
+      {mode === "log_likelihood" ? (
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="log_likelihood"
+          style={{ top: "50%", background: style.border }}
+          title="log_likelihood score"
+          className="!w-3 !h-3 !border-2 !border-surface"
+        />
+      ) : (
+        handles.map((h) => {
+          const ready = nodeOutputs?.[h.id] != null;
+          return (
+            <Handle
+              key={h.id}
+              type="source"
+              position={Position.Right}
+              id={h.id}
+              style={{ top: h.top, background: ready ? "#34d399" : style.border }}
+              title={`Variant ${h.label} — {heavy_chain, light_chain, log_likelihood}${ready ? " · ready" : ""}`}
+              className="!w-3 !h-3 !border-2 !border-surface"
+            />
+          );
+        })
+      )}
+    </div>
+  );
+}
 
 const _CDR_STRATEGY_LABEL: Record<string, string> = {
   random:       "Random",
@@ -906,6 +1057,344 @@ export function CDRMutatorNode({ id, data, selected }: NodeProps<NodeData>) {
           className="!w-3 !h-3 !border-2 !border-surface"
         />
       ) : (
+        <>
+          {handles.map((h) => {
+            const ready = nodeOutputs?.[h.id] != null;
+            return (
+              <Handle
+                key={h.id}
+                type="source"
+                position={Position.Right}
+                id={h.id}
+                style={{ top: h.top, background: ready ? "#34d399" : style.border }}
+                title={`Variant ${h.label} — heavy_chain + light_chain${ready ? " · ready" : ""}`}
+                className="!w-3 !h-3 !border-2 !border-surface"
+              />
+            );
+          })}
+          {/* Extra handle for batch AbMAP embedding (heavy_chain_variants list) */}
+          <Handle
+            type="source"
+            position={Position.Right}
+            id="heavy_chain_variants"
+            style={{ top: "96%", background: "#fb7185" }}
+            title="heavy_chain_variants — all VH sequences as a list (wire to AbMAP candidate_sequences)"
+            className="!w-3 !h-3 !border-2 !border-surface"
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── AbMAP node ────────────────────────────────────────────────────────────────
+// One input: "sequence" accepts a single AA string OR a list of strings.
+// Two outputs: "embedding" (single) and "candidate_embeddings" (batch dict).
+
+export function AbMAPNode({ id, selected }: NodeProps<NodeData>) {
+  const runStatus   = useCanvasStore((s) => s.runNodeStatuses[id]);
+  const nodeOutputs = useCanvasStore((s) => s.runNodeOutputs[id]);
+  const style       = CATEGORY_STYLE["sequence_embedding"];
+
+  const embReady  = nodeOutputs?.["embedding"] != null;
+  const candReady = nodeOutputs?.["candidate_embeddings"] != null;
+
+  return (
+    <div
+      style={{
+        borderColor: style.border,
+        minHeight: 90,
+        boxShadow: selected
+          ? `0 0 0 2px ${style.border}99, 0 4px 28px ${style.glow}`
+          : `0 4px 20px ${style.glow}`,
+      }}
+      className={`relative bg-surface2 border-2 rounded-xl px-3.5 py-2.5 min-w-[172px] transition-shadow
+        ${runStatus ? STATUS_RING[runStatus] ?? "" : ""}`}
+    >
+      {/* Single input handle — accepts string or list */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="sequence"
+        style={{ top: "50%", background: style.border }}
+        title="sequence — single AA string or list of strings"
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+
+      {/* Input label */}
+      <div className="absolute left-4 top-0 bottom-0 flex flex-col justify-around py-1 pointer-events-none">
+        <span className="text-[8px] text-slate-500 leading-none">seq</span>
+      </div>
+
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2 pl-5">
+        <div className="min-w-0">
+          <div className={`text-[10px] font-semibold uppercase tracking-wider mb-0.5 ${style.label}`}>
+            Embedding
+          </div>
+          <div className="text-sm font-bold text-white leading-tight">AbMAP</div>
+        </div>
+        {runStatus && STATUS_DOT[runStatus] && (
+          <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
+        )}
+      </div>
+
+      {/* Output handles */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="embedding"
+        style={{ top: "30%", background: embReady ? "#34d399" : style.border }}
+        title={`embedding — 512-d vector${embReady ? " · ready" : ""}`}
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="candidate_embeddings"
+        style={{ top: "70%", background: candReady ? "#34d399" : "#f59e0b" }}
+        title={`candidate_embeddings — {seq → [float]} dict${candReady ? " · ready" : ""}`}
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+
+      {/* Output labels */}
+      <div className="absolute right-4 top-0 bottom-0 flex flex-col justify-around py-1 pointer-events-none">
+        <span className="text-[8px] text-slate-500 leading-none text-right">emb</span>
+        <span className="text-[8px] text-amber-600 leading-none text-right">cands</span>
+      </div>
+    </div>
+  );
+}
+
+// ── ProGen2 node ──────────────────────────────────────────────────────────────
+
+// ── Loop Start node ────────────────────────────────────────────────────────
+export function LoopStartNode({ id, data, selected }: NodeProps<NodeData>) {
+  const runStatus = useCanvasStore((s) => s.runNodeStatuses[id]);
+  const updateNodeParams = useCanvasStore((s) => s.updateNodeParams);
+
+  const heavy   = String(data.params.heavy_chain ?? "");
+  const light   = String(data.params.light_chain ?? "");
+  const maxIter = Number(data.params.max_iterations ?? 5);
+
+  function set(field: string, value: unknown) {
+    updateNodeParams(id, { ...data.params, [field]: value });
+  }
+
+  return (
+    <div
+      style={{
+        borderColor: "#06b6d4",
+        boxShadow: selected
+          ? "0 0 0 2px #06b6d499, 0 4px 28px rgba(6,182,212,0.3)"
+          : "0 4px 20px rgba(6,182,212,0.2)",
+      }}
+      className={`bg-surface2 border-2 rounded-xl px-3.5 py-2.5 w-72
+        ${runStatus ? STATUS_RING[runStatus] ?? "" : ""}`}
+    >
+      <div className="flex items-center justify-between mb-2.5">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">↻ Loop</div>
+          <div className="text-sm font-bold text-white">Loop Start</div>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-slate-500">max</span>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={maxIter}
+            onChange={(e) => set("max_iterations", Number(e.target.value))}
+            className="nodrag w-12 text-center bg-canvas border border-border rounded px-1 py-0.5
+              text-xs text-cyan-300 font-mono focus:outline-none focus:border-cyan-400/60"
+          />
+          <span className="text-[10px] text-slate-500">iter</span>
+          {runStatus && STATUS_DOT[runStatus] && (
+            <span className={`w-2.5 h-2.5 rounded-full ml-1 ${STATUS_DOT[runStatus]}`} />
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1 mb-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold text-cyan-300 uppercase tracking-widest">VH · Heavy Chain</span>
+          <span className="text-[10px] text-slate-600">{heavy.length} AA</span>
+        </div>
+        <textarea
+          value={heavy}
+          onChange={(e) => set("heavy_chain", e.target.value)}
+          placeholder="EVQLVESGG… (required)"
+          rows={3}
+          className="nodrag w-full bg-canvas border border-border rounded-lg px-2.5 py-2 text-xs
+            font-mono text-slate-200 placeholder-slate-600 resize-none focus:outline-none
+            focus:border-cyan-400/60 transition-colors"
+        />
+      </div>
+
+      <div className="flex flex-col gap-1 mb-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold text-cyan-300/60 uppercase tracking-widest">VL · Light Chain</span>
+          <span className="text-[10px] text-slate-600">{light.length} AA</span>
+        </div>
+        <textarea
+          value={light}
+          onChange={(e) => set("light_chain", e.target.value)}
+          placeholder="DIQMTQSPS… (optional)"
+          rows={3}
+          className="nodrag w-full bg-canvas border border-border rounded-lg px-2.5 py-2 text-xs
+            font-mono text-slate-200 placeholder-slate-600 resize-none focus:outline-none
+            focus:border-cyan-400/40 transition-colors"
+        />
+      </div>
+
+      <Handle
+        type="source"
+        position={Position.Right}
+        id="out"
+        style={{ top: "50%", background: "#06b6d4" }}
+        title="heavy_chain, light_chain"
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+    </div>
+  );
+}
+
+// ── Loop End node ──────────────────────────────────────────────────────────
+export function LoopEndNode({ id, data, selected }: NodeProps<NodeData>) {
+  const runStatus = useCanvasStore((s) => s.runNodeStatuses[id]);
+
+  return (
+    <div
+      style={{
+        borderColor: "#06b6d4",
+        boxShadow: selected
+          ? "0 0 0 2px #06b6d499, 0 4px 28px rgba(6,182,212,0.3)"
+          : "0 4px 20px rgba(6,182,212,0.2)",
+      }}
+      className={`bg-surface2 border-2 rounded-xl px-3.5 py-2.5 w-52
+        ${runStatus ? STATUS_RING[runStatus] ?? "" : ""}`}
+    >
+      <div className="flex items-center justify-between mb-1.5">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-cyan-300">↻ Loop</div>
+          <div className="text-sm font-bold text-white">Loop End</div>
+        </div>
+        {runStatus && STATUS_DOT[runStatus] && (
+          <span className={`w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
+        )}
+      </div>
+
+      <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-cyan-950/30 border border-cyan-800/30">
+        <Code2 size={11} className="text-cyan-400 shrink-0" />
+        <span className="text-[11px] text-cyan-300 font-mono truncate">
+          {String(data.params.code ?? "").split("\n")[0].slice(0, 32) || "selection code…"}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-0.5 mt-2">
+        <div className="flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400/60" />
+          <span className="text-[10px] text-slate-500 font-mono">next_heavy_chain</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400/40" />
+          <span className="text-[10px] text-slate-500 font-mono">next_light_chain</span>
+        </div>
+      </div>
+
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="in"
+        style={{ top: "50%", background: "#06b6d4" }}
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+    </div>
+  );
+}
+
+export function ProGen2Node({ id, data, selected }: NodeProps<NodeData>) {
+  const runStatus   = useCanvasStore((s) => s.runNodeStatuses[id]);
+  const nodeOutputs = useCanvasStore((s) => s.runNodeOutputs[id]);
+  const style       = CATEGORY_STYLE["sequence_design"];
+
+  const mode    = String(data.params.mode ?? "generate");
+  const numSeqs = Math.max(1, Math.min(_MAX_VARIANT_HANDLES, Number(data.params.num_sequences ?? 5)));
+  const model   = String(data.params.model_name ?? "progen2-oas");
+
+  const handles = mode === "log_likelihood"
+    ? []
+    : Array.from({ length: numSeqs }, (_, i) => ({
+        id:    `variant_${i + 1}`,
+        label: String(i + 1),
+        top:   `${10 + ((i + 0.5) / numSeqs) * 80}%`,
+      }));
+
+  const minH = mode === "log_likelihood" ? 90 : Math.max(110, numSeqs * 24 + 52);
+
+  return (
+    <div
+      style={{
+        borderColor: style.border,
+        minHeight:   minH,
+        boxShadow: selected
+          ? `0 0 0 2px ${style.border}99, 0 4px 28px ${style.glow}`
+          : `0 4px 20px ${style.glow}`,
+      }}
+      className={`relative bg-surface2 border-2 rounded-xl px-3.5 py-2.5 min-w-[192px]
+        transition-shadow ${runStatus ? STATUS_RING[runStatus] ?? "" : ""}`}
+    >
+      {/* Single input handle */}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="in"
+        style={{ top: "50%", background: style.border }}
+        title="sequence (prompt)"
+        className="!w-3 !h-3 !border-2 !border-surface"
+      />
+
+      {/* Header */}
+      <div className="flex items-center justify-between gap-2 pr-7">
+        <div className="min-w-0">
+          <div className={`text-[10px] font-semibold uppercase tracking-wider mb-0.5 ${style.label}`}>
+            Sequence Design
+          </div>
+          <div className="text-sm font-bold text-white leading-tight">ProGen2</div>
+        </div>
+        {runStatus && STATUS_DOT[runStatus] && (
+          <span className={`shrink-0 w-2.5 h-2.5 rounded-full ${STATUS_DOT[runStatus]}`} />
+        )}
+      </div>
+
+      {/* Mode + model badges */}
+      <div className="mt-1.5 flex flex-col gap-0.5">
+        <span className="text-[10px] text-slate-400 leading-tight capitalize">{mode}</span>
+        <span className="text-[10px] text-sky-400 font-mono leading-tight">{model}</span>
+      </div>
+
+      {/* Variant number labels */}
+      {handles.length > 0 && (
+        <div className="absolute right-5 top-0 bottom-0 flex flex-col justify-around py-3 pointer-events-none">
+          {handles.map((h) => (
+            <span key={h.id} className="text-[9px] font-mono text-slate-500 text-right leading-none">
+              {h.label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Output handles */}
+      {mode === "log_likelihood" ? (
+        <Handle
+          type="source"
+          position={Position.Right}
+          id="log_likelihood"
+          style={{ top: "50%", background: style.border }}
+          title="log_likelihood score"
+          className="!w-3 !h-3 !border-2 !border-surface"
+        />
+      ) : (
         handles.map((h) => {
           const ready = nodeOutputs?.[h.id] != null;
           return (
@@ -915,7 +1404,7 @@ export function CDRMutatorNode({ id, data, selected }: NodeProps<NodeData>) {
               position={Position.Right}
               id={h.id}
               style={{ top: h.top, background: ready ? "#34d399" : style.border }}
-              title={`Variant ${h.label} — heavy_chain + light_chain${ready ? " · ready" : ""}`}
+              title={`Variant ${h.label} — {sequence, heavy_chain, log_likelihood}${ready ? " · ready" : ""}`}
               className="!w-3 !h-3 !border-2 !border-surface"
             />
           );

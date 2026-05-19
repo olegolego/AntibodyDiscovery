@@ -1,0 +1,48 @@
+id: deepsp
+name: DeepSP
+version: "1.0.0"
+category: bioinformatics
+description: >
+  Predicts spatial aggregation propensity (SAP), surface charge, and surface
+  hydrophobicity from antibody sequence. Implements the DeepSP descriptors
+  (Lailabcode/DeepSP, MIT license) using Kyte-Doolittle hydrophobicity
+  and the ANARCI Chothia numbering scheme to locate CDRs.
+  CPU only; runs in ~5 seconds.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: true
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS"
+    description: "VH amino-acid sequence (single-letter, no header)."
+  - name: light_chain
+    type: fasta
+    required: false
+    default: "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+    description: "VL amino-acid sequence. Optional but recommended for full Fv."
+
+outputs:
+  - name: sap_score
+    type: float
+    description: >
+      Spatial aggregation propensity score. Higher = more aggregation-prone.
+      A score > 40 is typically considered high risk.
+  - name: surface_charge
+    type: float
+    description: Net surface charge of the variable region (Asp/Glu negative, Arg/Lys/His positive).
+  - name: surface_hydrophobicity
+    type: float
+    description: >
+      Mean Kyte-Doolittle hydrophobicity of CDR residues exposed on the surface.
+  - name: cdr_residues
+    type: json
+    description: Dict mapping CDR loop names to extracted residue sequences.
+  - name: report
+    type: json
+    description: Full per-residue descriptor breakdown.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 120
+  conda_env: abmap

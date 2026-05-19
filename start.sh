@@ -95,7 +95,7 @@ ABMAP_PID=$!
 echo "Starting backend (port ${BACKEND_PORT})..."
 cd "$REPO_DIR/backend"
 source .venv/bin/activate
-uvicorn app.main:app --reload --host 127.0.0.1 --port "${BACKEND_PORT}" > /tmp/backend.log 2>&1 &
+uvicorn app.main:app --host 127.0.0.1 --port "${BACKEND_PORT}" > /tmp/backend.log 2>&1 &
 BACKEND_PID=$!
 
 # ── Frontend ──────────────────────────────────────────────────────────────────

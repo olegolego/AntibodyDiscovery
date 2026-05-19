@@ -1,0 +1,142 @@
+id: progen2
+name: ProGen2
+version: "0.1.0"
+category: sequence_design
+description: >
+  ProGen2 — Salesforce Research protein language model (GPT-J based, 764M parameters).
+  progen2-oas variant is fine-tuned on the Observed Antibody Space (OAS), making it
+  ideal for antibody-specific generation and scoring. Two modes: generate creates novel
+  antibody sequences conditioned on an optional prompt; log_likelihood scores the
+  naturalness of an existing sequence. Outputs variant bundles wired to ImmuneBuilder,
+  IgLM, AbMAP, etc.
+
+inputs:
+  - name: sequence
+    type: fasta
+    required: false
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCARNDYWGQGTLVTVSS"
+    description: >
+      Seed/prompt sequence. In generate mode, used as a partial prefix to
+      condition generation. In log_likelihood mode, scored in full.
+
+  - name: light_chain
+    type: fasta
+    required: false
+    default: ""
+    description: >
+      VL sequence (passed through into variant bundles; not scored separately).
+
+  - name: mode
+    type: str
+    required: false
+    default: "generate"
+    options:
+      - "generate"
+      - "log_likelihood"
+    description: >
+      generate: produce num_sequences new antibody sequences (conditioned on sequence
+      as optional prompt prefix). log_likelihood: score the provided sequence and
+      return a single naturalness score.
+
+  - name: num_sequences
+    type: int
+    required: false
+    default: 5
+    description: >
+      Number of sequences to generate (1–10). Each gets its own output handle.
+      Only used in generate mode.
+
+  - name: max_length
+    type: int
+    required: false
+    default: 150
+    description: >
+      Maximum generated sequence length (in tokens, not including BOS/EOS).
+      Typical antibody VH = 110–135 aa, VL = 100–115 aa.
+
+  - name: temperature
+    type: float
+    required: false
+    default: 1.0
+    description: Sampling temperature. Lower = more conservative; higher = more diverse.
+
+  - name: top_p
+    type: float
+    required: false
+    default: 0.9
+    description: Nucleus sampling p. 1.0 = no filtering.
+
+  - name: top_k
+    type: int
+    required: false
+    default: 0
+    description: >
+      Top-k sampling. 0 = disabled. Can be combined with top_p.
+
+  - name: model_name
+    type: str
+    required: false
+    default: "progen2-oas"
+    options:
+      - "progen2-oas"
+      - "progen2-medium"
+    description: >
+      progen2-oas: 764M, antibody-specific (fine-tuned on OAS). Recommended.
+      progen2-medium: 764M, general protein (trained on UniRef50 + OAS + other databases).
+
+outputs:
+  # ── Per-variant bundles ───────────────────────────────────────────────────────
+  - name: variant_1
+    type: json
+    description: "Variant 1 — {sequence, heavy_chain, light_chain, log_likelihood}."
+  - name: variant_2
+    type: json
+    description: "Variant 2 — {sequence, heavy_chain, light_chain, log_likelihood}."
+  - name: variant_3
+    type: json
+    description: "Variant 3 — {sequence, heavy_chain, light_chain, log_likelihood}."
+  - name: variant_4
+    type: json
+    description: "Variant 4 — {sequence, heavy_chain, light_chain, log_likelihood}."
+  - name: variant_5
+    type: json
+    description: "Variant 5 — {sequence, heavy_chain, light_chain, log_likelihood}."
+  - name: variant_6
+    type: json
+    description: "Variant 6 — {sequence, heavy_chain, light_chain, log_likelihood}."
+  - name: variant_7
+    type: json
+    description: "Variant 7 — {sequence, heavy_chain, light_chain, log_likelihood}."
+  - name: variant_8
+    type: json
+    description: "Variant 8 — {sequence, heavy_chain, light_chain, log_likelihood}."
+  - name: variant_9
+    type: json
+    description: "Variant 9 — {sequence, heavy_chain, light_chain, log_likelihood}."
+  - name: variant_10
+    type: json
+    description: "Variant 10 — {sequence, heavy_chain, light_chain, log_likelihood}."
+
+  # ── Convenience aliases ───────────────────────────────────────────────────────
+  - name: sequence
+    type: fasta
+    description: "Best-scoring generated sequence (alias of variant_1.sequence)."
+  - name: heavy_chain
+    type: fasta
+    description: "Best-scoring VH sequence (alias of variant_1.sequence)."
+
+  # ── Log-likelihood mode ───────────────────────────────────────────────────────
+  - name: log_likelihood
+    type: json
+    description: "Per-token mean log-likelihood (log_likelihood mode)."
+
+  - name: metadata
+    type: json
+    description: Mode, model, temperature, top_p, lengths, scores.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 600
+
+paper_url: https://doi.org/10.1101/2022.12.21.521521

@@ -1,0 +1,50 @@
+id: netsolp
+name: NetSolP
+version: "1.0.0"
+category: bioinformatics
+description: >
+  Predicts antibody sequence solubility using the NetSolP-1.0 model
+  (TviNet/NetSolP-1.0, BSD 3-Clause license). Runs an ESM-1b-based neural
+  network that returns a solubility probability score (0–1) and a usability
+  score for each chain. Higher scores indicate better solubility.
+  Requires ESM-1b weights (~700 MB, auto-downloaded on first use).
+  GPU optional, CPU supported.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: true
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS"
+    description: "VH amino-acid sequence (single-letter, no header)."
+  - name: light_chain
+    type: fasta
+    required: false
+    default: "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+    description: "VL amino-acid sequence. Optional."
+
+outputs:
+  - name: heavy_solubility
+    type: float
+    description: "VH solubility probability (0–1). ≥0.45 considered soluble."
+  - name: light_solubility
+    type: float
+    description: "VL solubility probability (0–1). Null if no VL provided."
+  - name: heavy_usability
+    type: float
+    description: "VH usability score (0–1) — combined solubility + expression proxy."
+  - name: light_usability
+    type: float
+    description: "VL usability score (0–1). Null if no VL provided."
+  - name: prediction
+    type: str
+    description: >
+      Overall prediction: 'soluble' if both chains ≥0.45, 'insoluble' otherwise.
+  - name: report
+    type: json
+    description: Full per-chain prediction dict from NetSolP.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 120
+  conda_env: abmap

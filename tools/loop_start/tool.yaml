@@ -1,0 +1,42 @@
+id: loop_start
+name: Loop Start
+version: "1.0"
+category: control_flow
+description: >
+  Marks the beginning of the loop region. Provide your starting sequences here —
+  on each subsequent iteration the executor patches heavy_chain / light_chain with
+  whatever Loop End outputs as next_heavy_chain / next_light_chain.
+  Connect its output to the first tool you want to repeat.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: true
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS"
+    description: Starting VH sequence (single-letter AA, no FASTA header).
+
+  - name: light_chain
+    type: fasta
+    required: false
+    default: "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+    description: Starting VL sequence. Leave empty for nanobody.
+
+  - name: max_iterations
+    type: int
+    required: false
+    default: 5
+    description: "Maximum number of loop iterations to run."
+
+outputs:
+  - name: heavy_chain
+    type: fasta
+    description: VH sequence for this iteration.
+
+  - name: light_chain
+    type: fasta
+    description: VL sequence for this iteration.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 5

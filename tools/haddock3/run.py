@@ -187,14 +187,7 @@ sampling = {sampling}
 select = {select_top}
 
 [flexref]
-tolerance = 50
-ambig_fname = "ambig-restraints.tbl"
-unambig_fname = "antibody-unambig.tbl"
-
-[caprieval]
-
-[emref]
-tolerance = 50
+tolerance = 99
 ambig_fname = "ambig-restraints.tbl"
 unambig_fname = "antibody-unambig.tbl"
 

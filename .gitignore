@@ -53,7 +53,18 @@ tools/*/cache.db
 # Cloned repos inside project
 frontend/AntibodyDiscovery/
 tools/superwater/SuperWater/
+tools/equifold/repo/
+
+# Output / runtime files
+graphify-out/
+monitor.log
+watchdog.log
+
+# Large non-code files
+tools/superwater/*.pdf
 
 # IDE
 .idea/
 .vscode/settings.json
+tools/netsolp/NetSolP-1.0/
+tools/progen2/progen_src/

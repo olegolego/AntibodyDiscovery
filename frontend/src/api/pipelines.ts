@@ -29,3 +29,8 @@ export async function savePipeline(pipeline: Pipeline): Promise<Pipeline> {
 export async function deletePipeline(id: string): Promise<void> {
   await api.delete(`/pipelines/${id}`);
 }
+
+export async function generatePipeline(prompt: string): Promise<Pipeline> {
+  const { data } = await api.post<Pipeline>("/pipelines/generate", { prompt });
+  return data;
+}

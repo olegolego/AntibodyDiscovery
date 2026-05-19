@@ -39,6 +39,8 @@ outputs:
     type: json
     description: "Number of waters placed and summary statistics."
 
+paper_url: https://doi.org/10.1101/2024.11.18.624208
+
 runtime:
   kind: local_python
   gpu: false

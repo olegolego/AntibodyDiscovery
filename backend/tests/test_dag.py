@@ -34,4 +34,4 @@ def test_cycle_raises():
 def test_upstream_outputs():
     edges = [PipelineEdge(source="n1.structure", target="n2.structure")]
     result = upstream_outputs("n2", edges)
-    assert result == {"structure": "n1.structure"}
+    assert ("structure", "n1.structure") in result

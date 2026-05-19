@@ -1,0 +1,69 @@
+id: filter
+name: Filter
+version: "1.0"
+category: design
+description: >
+  Keep only sequences that meet a score threshold, or use custom Python code
+  for arbitrary criteria. Upstream outputs are injected as named variables
+  (same as Compute). Outputs the surviving sequences as multi-FASTA plus
+  their scores.
+
+inputs:
+  - name: score_var
+    type: str
+    required: false
+    default: ""
+    description: >
+      Name of the upstream variable holding a {name: score} dict.
+      Used for threshold-based filtering.
+
+  - name: sequence_var
+    type: str
+    required: false
+    default: ""
+    description: >
+      Name of the upstream variable holding a multi-FASTA string.
+
+  - name: min_score
+    type: float
+    required: false
+    default: null
+    description: "Keep sequences with score >= min_score"
+
+  - name: max_score
+    type: float
+    required: false
+    default: null
+    description: "Keep sequences with score <= max_score"
+
+  - name: code
+    type: python_code
+    required: false
+    default: |
+      # All upstream outputs are available as variables.
+      # Set result to a list of names to keep, or a dict {name: score},
+      # or a multi-FASTA string of sequences to keep.
+      result = None
+    description: "Custom filter code — overrides threshold params when set"
+
+outputs:
+  - name: sequences
+    type: str
+    description: "Multi-FASTA of sequences that passed the filter"
+
+  - name: scores
+    type: json
+    description: "{name: score} dict for sequences that passed"
+
+  - name: count
+    type: int
+    description: "Number of sequences that passed"
+
+  - name: removed_count
+    type: int
+    description: "Number of sequences that were removed"
+
+runtime:
+  kind: local_python
+  timeout_seconds: 120
+  gpu: false

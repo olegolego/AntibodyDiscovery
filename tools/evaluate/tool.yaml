@@ -1,0 +1,53 @@
+id: evaluate
+name: Evaluate
+version: "1.0"
+category: design
+description: >
+  Compute summary statistics over a score dictionary from an upstream node
+  (e.g. DNN surrogate predictions). Reports mean, std, min, max, best and
+  worst entries, and a list of names sorted by score. Optionally accepts
+  custom Python code to define alternative evaluation logic.
+
+inputs:
+  - name: score_var
+    type: str
+    required: false
+    default: ""
+    description: >
+      Name of the upstream variable holding a {name: score} dict to evaluate.
+
+  - name: sequence_var
+    type: str
+    required: false
+    default: ""
+    description: >
+      Name of the upstream FASTA variable — enriches output with sequences.
+
+  - name: code
+    type: python_code
+    required: false
+    default: |
+      # All upstream outputs are available as variables.
+      # Optionally define custom evaluation logic.
+      # Set result = {"scores": {...}, "summary": {...}} or leave as None
+      # to use the automatic statistics.
+      result = None
+    description: "Custom evaluation code — overrides auto stats when result is set"
+
+outputs:
+  - name: scores
+    type: json
+    description: "{name: score} dict (pass-through from score_var)"
+
+  - name: summary
+    type: json
+    description: "{mean, std, min, max, count, best_name, best_score, worst_name, worst_score}"
+
+  - name: sorted_names
+    type: json
+    description: "List of names sorted best → worst"
+
+runtime:
+  kind: local_python
+  timeout_seconds: 60
+  gpu: false

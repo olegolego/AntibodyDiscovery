@@ -52,6 +52,11 @@ function nodeType(toolId: string): string {
   if (toolId === "equidock")        return "equidockNode";
   if (toolId === "compute")         return "computeNode";
   if (toolId === "cdr_mutator")     return "cdrMutatorNode";
+  if (toolId === "abmap")           return "abmapNode";
+  if (toolId === "iglm")            return "iglmNode";
+  if (toolId === "progen2")         return "progen2Node";
+  if (toolId === "loop_start")      return "loopStartNode";
+  if (toolId === "loop_end")        return "loopEndNode";
   return "toolNode";
 }
 
@@ -93,7 +98,18 @@ export const useCanvasStore = create<CanvasState>()(persist((set, get) => ({
   runNodeOutputs: {},
 
   onNodesChange: (changes) =>
-    set((s) => ({ nodes: applyNodeChanges(changes, s.nodes) })),
+    set((s) => {
+      const removedNodeIds = new Set(
+        changes
+          .filter((change) => change.type === "remove")
+          .map((change) => change.id)
+      );
+      const nodes = applyNodeChanges(changes, s.nodes);
+      const edges = removedNodeIds.size
+        ? s.edges.filter((edge) => !removedNodeIds.has(edge.source) && !removedNodeIds.has(edge.target))
+        : s.edges;
+      return { nodes, edges };
+    }),
 
   onEdgesChange: (changes) =>
     set((s) => ({ edges: applyEdgeChanges(changes, s.edges) })),
@@ -174,6 +190,7 @@ export const useCanvasStore = create<CanvasState>()(persist((set, get) => ({
 
   toPipeline: (name) => {
     const { nodes, edges } = get();
+    const nodeIds = new Set(nodes.map((n) => n.id));
     const pipelineNodes: PipelineNode[] = nodes.map((n) => {
       const d = n.data as NodeData;
       return { id: n.id, tool: d.tool.id, params: d.params, position: n.position };
@@ -183,15 +200,30 @@ export const useCanvasStore = create<CanvasState>()(persist((set, get) => ({
       name,
       schema_version: "1",
       nodes: pipelineNodes,
-      edges: edges.map((e) => ({
-        source: `${e.source}.${fallbackHandle(nodes, e.source, "source", e.sourceHandle)}`,
-        target: `${e.target}.${fallbackHandle(nodes, e.target, "target", e.targetHandle)}`,
-      })),
+      edges: edges
+        .filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target))
+        .map((e) => ({
+          source: `${e.source}.${fallbackHandle(nodes, e.source, "source", e.sourceHandle)}`,
+          target: `${e.target}.${fallbackHandle(nodes, e.target, "target", e.targetHandle)}`,
+        })),
     };
   },
 }), {
   name: "pdp_canvas",
-  partialize: (state) => ({ nodes: state.nodes, edges: state.edges }),
+  partialize: (state) => ({
+    edges: state.edges,
+    nodes: state.nodes.map((n) => ({
+      ...n,
+      data: {
+        ...n.data,
+        params: Object.fromEntries(
+          Object.entries((n.data as { params: Record<string, unknown> }).params ?? {}).map(
+            ([k, v]) => [k, typeof v === "string" && v.length > 50_000 ? "__large_omitted__" : v]
+          )
+        ),
+      },
+    })),
+  }),
   onRehydrateStorage: () => (state) => {
     if (!state?.nodes?.length) return;
     _nodeCounter = state.nodes.reduce((max: number, n: Node) => {

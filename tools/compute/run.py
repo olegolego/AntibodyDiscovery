@@ -18,7 +18,19 @@ def _run(inputs: dict) -> dict:
     old_stdout = sys.stdout
     sys.stdout = captured
 
-    namespace = dict(injected)
+    import collections, json as _json, math, re as _re
+    import numpy as np
+    import scipy
+
+    namespace = {
+        "np": np,
+        "scipy": scipy,
+        "math": math,
+        "re": _re,
+        "json": _json,
+        "collections": collections,
+        **injected,
+    }
     error = None
     try:
         exec(compile(code, "<compute>", "exec"), namespace)  # noqa: S102

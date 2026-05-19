@@ -251,6 +251,25 @@ class DatasetEntryRow(Base):
     updated_at:         Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+# ── Trained Model Registry ─────────────────────────────────────────────────────
+
+class TrainedModelRow(Base):
+    """A DNN model trained via the Custom DNN tool, stored for reuse."""
+    __tablename__ = "trained_models"
+
+    id:                Mapped[str]      = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name:              Mapped[str]      = mapped_column(String(255), nullable=False)
+    run_id:            Mapped[str|None] = mapped_column(String(36), nullable=True, index=True)
+    node_id:           Mapped[str|None] = mapped_column(String(36), nullable=True)
+    architecture_spec: Mapped[str|None] = mapped_column(Text, nullable=True)   # JSON
+    embedding_model:   Mapped[str|None] = mapped_column(String(16), nullable=True)  # "8M" | "35M" | ...
+    task:              Mapped[str|None] = mapped_column(String(32), nullable=True)   # regression | binary_classification | multiclass
+    num_sequences:     Mapped[int|None] = mapped_column(Integer, nullable=True)
+    metrics:           Mapped[str|None] = mapped_column(Text, nullable=True)   # JSON final metrics
+    weights_b64:       Mapped[str|None] = mapped_column(Text, nullable=True)   # base64 state_dict
+    created_at:        Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 # ── Tool Workshop ──────────────────────────────────────────────────────────────
 
 class CustomToolRow(Base):

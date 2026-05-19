@@ -256,6 +256,15 @@ async def update_tool(tool_id: str, body: UpdateToolRequest) -> CustomToolOut:
             raise HTTPException(status_code=404, detail="Tool not found")
         if body.name is not None:
             row.name = body.name
+            # Keep the `name:` field inside tool.yaml in sync
+            try:
+                import yaml as _yaml
+                data = _yaml.safe_load(row.tool_yaml or "") or {}
+                if isinstance(data, dict):
+                    data["name"] = body.name
+                    row.tool_yaml = _yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            except Exception:
+                pass  # don't break on malformed yaml
         if body.tool_yaml is not None:
             row.tool_yaml = body.tool_yaml
         if body.run_py is not None:

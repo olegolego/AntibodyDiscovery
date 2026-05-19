@@ -4,14 +4,17 @@ version: "0.1.0"
 category: sequence_embedding
 description: >
   Antibody sequence embedding with AbMAP, using CDR-focused mutagenesis augmentation
-  and the upstream Bepler/Berger-backed AbMAP checkpoint. Accepts a single heavy or
-  light chain sequence and returns a JSON embedding plus metadata.
+  and the upstream Bepler/Berger-backed AbMAP checkpoint. Accepts a single sequence
+  string or a list of sequences — automatically routes to single or batch embedding.
 
 inputs:
   - name: sequence
     type: fasta
-    required: true
-    description: Antibody heavy- or light-chain amino acid sequence (single-letter FASTA or raw sequence).
+    required: false
+    description: >
+      A single VH/VL sequence string (single-letter FASTA or raw AA) OR a list of
+      sequence strings for batch embedding. String → returns embedding. List → returns
+      candidate_embeddings dict keyed by sequence string.
   - name: chain_type
     type: str
     required: false
@@ -36,7 +39,15 @@ inputs:
 outputs:
   - name: embedding
     type: json
-    description: AbMAP embedding as a JSON array.
+    description: AbMAP embedding as a JSON array (single-sequence mode).
+  - name: embeddings
+    type: json
+    description: List of embedding arrays (batch/multi-FASTA mode).
+  - name: candidate_embeddings
+    type: json
+    description: >
+      {sequence_string → [float]} dict, populated when a list is passed as sequence.
+      Wire directly to rcc_mlde or dnn_mlde candidate_embeddings.
   - name: metadata
     type: json
     description: Embedding metadata including task, shape, CDR length, and sequence length.

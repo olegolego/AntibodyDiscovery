@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from sqlalchemy import delete as sql_delete
 
-from app.core.executor import create_run, execute_run, get_run, request_cancel
+from app.core.executor import create_run, execute_run, get_run, request_cancel, request_force_fail
 from app.db.models import (
     DockingResultRow, DesignSequenceRow, EmbeddingRow,
     NodeAnalysisRow, RunRow, StructureRow,
@@ -213,12 +213,20 @@ async def submit_run(pipeline: Pipeline, background_tasks: BackgroundTasks):
 
 @router.get("/", response_model=list[Run])
 async def list_runs(db: AsyncSession = Depends(get_db)):
-    rows = (await db.execute(select(RunRow).order_by(RunRow.created_at.desc()))).scalars().all()
+    rows = (await db.execute(select(RunRow).order_by(RunRow.created_at.desc()).limit(100))).scalars().all()
     result = []
     for r in rows:
         run = Run.model_validate_json(r.data)
         if not run.created_at:
             run.created_at = r.created_at.isoformat()
+        # Strip large payload — list view only needs status, errors, and node IDs.
+        # Full data (outputs, logs, pipeline params) is available via GET /runs/{id}/.
+        for node in run.nodes.values():
+            node.outputs = {}
+            node.logs = []
+        snap = run.pipeline_snapshot
+        for n in snap.get("nodes", []):
+            n["params"] = {}
         result.append(run)
     return result
 
@@ -262,12 +270,15 @@ async def delete_run(run_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{run_id}/force-fail/")
 async def force_fail_run(run_id: str, db: AsyncSession = Depends(get_db)):
-    """Mark a stuck running/queued run as failed without needing an active executor."""
+    """Stop a running/queued run and mark it as failed."""
     row = await db.get(RunRow, run_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Run not found")
     if row.status not in ("running", "queued"):
         raise HTTPException(status_code=400, detail=f"Run is already {row.status}")
+    # Signal executor to stop and mark as failed (handles active background tasks).
+    request_force_fail(run_id)
+    # Also update DB directly as a fallback for runs with no active executor.
     try:
         data = json.loads(row.data)
         data["status"] = "failed"

@@ -1,0 +1,76 @@
+id: choose
+name: Choose
+version: "1.0"
+category: design
+description: >
+  Select the best sequence(s) from an upstream scored collection.
+  Upstream outputs are injected as named Python variables (same as Compute).
+  Use strategy "top_score" or "bottom_score" for automatic selection by
+  naming the score variable and optionally the FASTA variable, or write
+  custom Python code and assign the selected entry to `result`.
+
+inputs:
+  - name: strategy
+    type: str
+    required: false
+    default: top_score
+    options: [top_score, bottom_score, custom_code]
+    description: "Selection strategy"
+
+  - name: score_var
+    type: str
+    required: false
+    default: ""
+    description: >
+      Name of the upstream variable holding a {name: score} dict
+      (e.g. custom_dnn_1_predictions). Required for top_score / bottom_score.
+
+  - name: sequence_var
+    type: str
+    required: false
+    default: ""
+    description: >
+      Name of the upstream variable holding a multi-FASTA string
+      (e.g. dataset_1_heavy_chain). Optional — enriches output with sequences.
+
+  - name: n
+    type: int
+    required: false
+    default: 1
+    description: "Number of sequences to select (top N)"
+
+  - name: code
+    type: python_code
+    required: false
+    default: |
+      # All upstream outputs are available as variables.
+      # Assign your selection to `result` as a dict:
+      # result = {"name": "seq_id", "sequence": "EVQL...", "score": 0.95}
+      result = None
+    description: "Custom selection code (strategy = custom_code)"
+
+outputs:
+  - name: sequence
+    type: str
+    description: "Amino-acid sequence of the top pick (no FASTA header)"
+
+  - name: name
+    type: str
+    description: "Identifier of the selected sequence"
+
+  - name: score
+    type: float
+    description: "Score of the selected sequence"
+
+  - name: sequences
+    type: str
+    description: "Multi-FASTA of top N selected sequences (useful when n > 1)"
+
+  - name: ranking
+    type: json
+    description: "Full ranked list [{rank, name, sequence, score}]"
+
+runtime:
+  kind: local_python
+  timeout_seconds: 120
+  gpu: false

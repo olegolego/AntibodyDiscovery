@@ -764,6 +764,112 @@ function _renderValue(v: unknown): React.ReactNode {
   return <span className="font-mono text-xs text-slate-400">{String(v)}</span>;
 }
 
+function DnnMldeView({ data }: { data: NodeAnalysis }) {
+  const raw = data.raw_outputs ?? {} as Record<string, unknown>;
+  const metrics    = (raw.metrics    ?? {}) as Record<string, unknown>;
+  const artifact   = (raw.model_artifact ?? {}) as Record<string, unknown>;
+  const topSeqs    = (raw.top_sequences ?? []) as string[];
+  const acqScores  = (raw.acquisition_scores ?? {}) as Record<string, number>;
+  const meanPred   = (raw.mean_predictions   ?? {}) as Record<string, number>;
+  const epistemic  = (raw.epistemic_uncertainty ?? {}) as Record<string, number>;
+  const confUnc    = (raw.conformational_uncertainty ?? {}) as Record<string, number>;
+
+  const scores = Object.values(acqScores).filter((v) => typeof v === "number") as number[];
+  const minScore = scores.length ? Math.min(...scores) : null;
+  const maxScore = scores.length ? Math.max(...scores) : null;
+  const meanScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+
+  const nRanks     = metrics.n_ranks     as number | undefined;
+  const nCommittee = metrics.n_committee as number | undefined;
+  const modelType  = metrics.model_type  as string | undefined;
+  const epochs     = metrics.epochs      as number | undefined;
+  const rankNames  = (artifact.rank_names ?? metrics.rank_names ?? []) as string[];
+  const inDim      = artifact.in_dim as number | undefined;
+
+  return (
+    <div className="pt-4 flex flex-col gap-5">
+      {/* Model summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard label="Ranks" value={String(nRanks ?? "—")} sub={rankNames.slice(0,2).join(", ")} />
+        <StatCard label="Ensemble" value={String(nCommittee ?? "—")} sub="committee members" />
+        <StatCard label="Embedding dim" value={inDim ? `${inDim}d` : "—"} sub={modelType ?? undefined} />
+        <StatCard label="Epochs" value={String(epochs ?? "—")} sub="training" />
+      </div>
+
+      {/* Acquisition score summary */}
+      {scores.length > 0 && (
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">
+            Acquisition score distribution ({scores.length} sequences)
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <StatCard label="Min α" value={minScore!.toFixed(2)} />
+            <StatCard label="Mean α" value={meanScore!.toFixed(2)} />
+            <StatCard label="Max α" value={maxScore!.toFixed(2)} />
+          </div>
+        </div>
+      )}
+
+      {/* Top sequences table */}
+      {topSeqs.length > 0 && (
+        <div>
+          <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">
+            Top {topSeqs.length} candidates
+          </div>
+          <div className="border border-border rounded-lg overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border bg-white/[0.02]">
+                    <th className="px-3 py-2 text-left text-slate-500 font-medium w-6">#</th>
+                    <th className="px-3 py-2 text-left text-slate-500 font-medium">Sequence</th>
+                    <th className="px-3 py-2 text-right text-slate-500 font-medium w-20">α score</th>
+                    <th className="px-3 py-2 text-right text-slate-500 font-medium w-20">μ̄ pred</th>
+                    <th className="px-3 py-2 text-right text-slate-500 font-medium w-20">σ epi</th>
+                    <th className="px-3 py-2 text-right text-slate-500 font-medium w-20">σ conf</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {topSeqs.slice(0, 20).map((seq, i) => (
+                    <tr key={i} className="border-b border-border/50 hover:bg-white/[0.02]">
+                      <td className="px-3 py-1.5 text-slate-600">{i + 1}</td>
+                      <td className="px-3 py-1.5 font-mono text-slate-400 max-w-xs truncate"
+                          title={seq}>{seq}</td>
+                      <td className="px-3 py-1.5 text-right font-mono text-sky-300">
+                        {acqScores[seq] != null ? acqScores[seq].toFixed(2) : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-mono text-slate-400">
+                        {meanPred[seq] != null ? (meanPred[seq] as number).toFixed(2) : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-mono text-amber-400/70">
+                        {epistemic[seq] != null ? (epistemic[seq] as number).toFixed(3) : "—"}
+                      </td>
+                      <td className="px-3 py-1.5 text-right font-mono text-slate-500">
+                        {confUnc[seq] != null ? (confUnc[seq] as number).toFixed(3) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Model artifact summary (no raw weights) */}
+      <div>
+        <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">Model artifact</div>
+        <div className="bg-canvas border border-border rounded-lg px-4 py-3 text-xs text-slate-400 font-mono">
+          {nRanks} rank{nRanks !== 1 ? "s" : ""} · {nCommittee} committee member{nCommittee !== 1 ? "s" : ""}
+          {inDim ? ` · ${inDim}d embeddings` : ""}
+          {rankNames.length ? ` · [${rankNames.join(", ")}]` : ""}
+          <span className="ml-2 text-slate-600">(weights omitted from display)</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GenericOutputView({ data }: { data: NodeAnalysis }) {
   const raw = data.raw_outputs ?? {};
   const entries = Object.entries(raw).filter(([, v]) => v !== null && v !== undefined);
@@ -813,7 +919,8 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
   const isMegaDock      = toolId === "megadock";
   const isGromacs       = toolId === "gromacs_mmpbsa";
   const isStructure     = toolId === "esmfold" || toolId === "alphafold_monomer" || toolId === "equifold";
-  const isSpecialized   = isImmuneBuilder || isHaddock || isEquiDock || isSuperWater || isMegaDock || isGromacs || isStructure;
+  const isDnnMlde       = toolId === "dnn_mlde";
+  const isSpecialized   = isImmuneBuilder || isHaddock || isEquiDock || isSuperWater || isMegaDock || isGromacs || isStructure || isDnnMlde;
 
   const availableModels = modelQueries
     .map((q, i) => ({ index: i, data: q.data }))
@@ -845,6 +952,7 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
     sequence_db: "Sequence Library — Entry",
     target_input: "Target Input — Antigen Structure",
     compute: "Compute — Custom Code",
+    dnn_mlde: "DNN-MLDE — Active Learning Results",
   };
   const headerTitle = _TOOL_TITLES[toolId ?? ""] ?? (toolId ? `${toolId} — Outputs` : "Node Outputs");
 
@@ -859,6 +967,7 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
     abmap: "Antibody structure-aware embeddings",
     proteinmpnn: "Inverse-folding sequence design",
     compute: "User-defined Python computation",
+    dnn_mlde: "RCC acquisition · committee ensemble · top candidate ranking",
   };
   const _afGene = (activeData?.plddt as unknown as { gene?: string } | null)?.gene;
   const _afOrg  = (activeData?.plddt as unknown as { organism?: string } | null)?.organism;
@@ -924,6 +1033,9 @@ export function AnalysisPanel({ runId, nodeId, onClose }: Props) {
           )}
           {isStructure && activeData && (
             <ModelContent data={activeData} />
+          )}
+          {isDnnMlde && activeData && (
+            <DnnMldeView data={activeData} />
           )}
           {!isSpecialized && activeData && (
             <GenericOutputView data={activeData} />

@@ -16,6 +16,7 @@ from app.db.models import (
     MoleculeRow,
     NodeAnalysisRow,
     StructureRow,
+    TrainedModelRow,
 )
 from app.db.session import AsyncSessionLocal
 from app.models.run import Run
@@ -23,7 +24,7 @@ from app.models.run import Run
 
 # ── Molecule registry (in-memory to avoid redundant DB lookups within a session) ──
 
-_molecule_cache: dict[str, str] = {}  # "{heavy[:40]}:{light[:40]}" -> molecule_id
+_molecule_cache: dict[str, str] = {}  # "{heavy}:{light}" -> molecule_id
 
 
 async def _get_or_create_molecule(
@@ -39,7 +40,7 @@ async def _get_or_create_molecule(
     if not heavy:
         return None
 
-    cache_key = f"{heavy[:40]}:{light[:40]}"
+    cache_key = f"{heavy}:{light}"
     if cache_key in _molecule_cache:
         return _molecule_cache[cache_key]
 
@@ -262,7 +263,7 @@ async def _collect_gromacs_mmpbsa(
 # ── Public entry point ────────────────────────────────────────────────────────
 
 _STRUCTURE_TOOLS = {"immunebuilder", "esmfold", "alphafold_monomer", "equifold"}
-_DESIGN_TOOLS    = {"proteinmpnn", "rfdiffusion", "biophi"}
+_DESIGN_TOOLS    = {"proteinmpnn", "rfdiffusion", "biophi", "iglm", "progen2"}
 _EMBEDDING_TOOLS = {"abmap", "ablang", "esm_embedding", "cheap_embedding"}
 
 _MAX_VARIANT_HANDLES = 10
@@ -329,6 +330,87 @@ async def _collect_cdr_mutator(
             await db.commit()
 
 
+async def _collect_rcc_mlde(
+    run: Run, node_id: str, outputs: dict[str, Any]
+) -> None:
+    # Only collect from training nodes (not scoring/inference nodes)
+    if "score" in node_id.lower() and "train" not in node_id.lower():
+        return
+    artifact = outputs.get("model_artifact")
+    if not artifact or not isinstance(artifact, dict):
+        return
+    committees_b64 = artifact.get("committees")  # dict: {rank_name: base64_pickle}
+    if not committees_b64:
+        return
+
+    rank_names = artifact.get("rank_names", [])
+    kappa_epi = artifact.get("kappa_epi", 2.0)
+    kappa_conf = artifact.get("kappa_conf", 0.5)
+    model_type = artifact.get("model_type", "ridge")
+    task = artifact.get("task", "regression")
+    metrics_raw = outputs.get("metrics") or {}
+    n_seqs = int((outputs.get("metrics") or {}).get("n_candidates") or len(outputs.get("acquisition_scores") or {}))
+    arch_spec = {
+        "model_type": model_type,
+        "rank_names": rank_names,
+        "kappa_epi": kappa_epi,
+        "kappa_conf": kappa_conf,
+        "n_committees": len(rank_names),
+    }
+    iter_label = f" · iter {run.iteration}" if run.iteration is not None else ""
+    name = f"RCC-MLDE{iter_label} · {run.id[:8]}"
+
+    async with AsyncSessionLocal() as db:
+        db.add(TrainedModelRow(
+            name=name,
+            run_id=run.id,
+            node_id=node_id,
+            architecture_spec=json.dumps(arch_spec),
+            embedding_model="AbMAP",
+            task=task,
+            num_sequences=n_seqs,
+            metrics=json.dumps(metrics_raw),
+            weights_b64=json.dumps(committees_b64) if isinstance(committees_b64, dict) else committees_b64,
+        ))
+        await db.commit()
+
+
+async def _collect_custom_dnn(
+    run: Run, node_id: str, inputs: dict[str, Any], outputs: dict[str, Any]
+) -> None:
+    artifact = outputs.get("model_artifact")
+    if not artifact or not isinstance(artifact, dict):
+        return
+    weights_b64 = artifact.get("weights_b64")
+    if not weights_b64:
+        return  # inference-only run — don't re-register the existing model
+
+    metrics_raw = outputs.get("metrics") or {}
+    arch_spec = artifact.get("architecture_spec") or {}
+    nodes_list = arch_spec.get("nodes", []) if isinstance(arch_spec, dict) else []
+    layer_types = [n.get("type", "") for n in nodes_list]
+    has_transformer = any(t in ("TransformerEncoder", "MultiheadAttention") for t in layer_types)
+    has_recurrent = any(t in ("LSTM", "GRU") for t in layer_types)
+    arch_label = "Transformer" if has_transformer else "Recurrent" if has_recurrent else "MLP"
+    task = artifact.get("task", "regression")
+    emb = artifact.get("embedding_model", "8M")
+    name = f"{arch_label} · {task} · {run.id[:8]}"
+
+    async with AsyncSessionLocal() as db:
+        db.add(TrainedModelRow(
+            name=name,
+            run_id=run.id,
+            node_id=node_id,
+            architecture_spec=json.dumps(arch_spec) if isinstance(arch_spec, dict) else str(arch_spec),
+            embedding_model=emb,
+            task=task,
+            num_sequences=len(outputs.get("predictions") or []),
+            metrics=json.dumps(metrics_raw),
+            weights_b64=weights_b64,
+        ))
+        await db.commit()
+
+
 async def collect(
     run: Run,
     node_id: str,
@@ -367,6 +449,10 @@ async def collect(
             await _collect_design(run, node_id, tool_id, outputs, molecule_id)
         elif tool_id in _EMBEDDING_TOOLS:
             await _collect_embedding(run, node_id, tool_id, outputs, molecule_id)
+        elif tool_id in ("rcc_mlde", "dnn_mlde"):
+            await _collect_rcc_mlde(run, node_id, outputs)
+        elif tool_id == "custom_dnn":
+            await _collect_custom_dnn(run, node_id, inputs, outputs)
     except Exception as exc:
         # Never crash the pipeline for collector failures
         import logging

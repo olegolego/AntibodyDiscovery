@@ -1,0 +1,201 @@
+id: dnn_mlde
+name: DNN-MLDE Committee
+version: "1.0"
+category: ml
+description: >
+  Deep Neural Network committee for ML-Assisted Directed Evolution.
+  Drop-in replacement for RCC-MLDE that uses PyTorch MLP ensemble members
+  instead of Ridge regressors, enabling nonlinear function approximation.
+
+  Unique feature: accepts a pretrain_dataset_id pointing to a labelled dataset
+  in the platform library (e.g., AL_results, 2400 sequences). The adapter
+  pre-loads and AbMAP-embeds those sequences before passing them to training,
+  giving the DNN a strong prior before the first loop iteration.
+
+  Same acquisition function as RCC-MLDE:
+    α(x) = μ̄ + κ_epi·σ_epi − κ_conf·σ_conf
+
+  Compatible with the same pipeline wiring as rcc_mlde — just swap node type.
+
+inputs:
+  # ── DNN architecture (from DNN Designer) ────────────────────────────────
+  - name: architecture_spec
+    type: json
+    required: false
+    default: null
+    description: >
+      Architecture spec JSON produced by the DNN Designer page.
+      If omitted, uses a built-in default MLP: Input(512)→Linear(256)→ReLU→Dropout
+      →Linear(128)→ReLU→Dropout→Linear(64)→ReLU→Output(1).
+      Each committee member is a fresh DynamicDNN instance trained on a bootstrap
+      resample — the same DynamicDNN class used by the custom_dnn tool.
+      Use the "Design Architecture →" button on the node's ParamPanel to open
+      the visual designer and save a custom architecture into this field.
+
+  # ── Pre-training dataset (from platform library) ─────────────────────────
+  - name: pretrain_dataset_id
+    type: str
+    required: false
+    default: null
+    description: >
+      UUID of a dataset in the platform library to use for pre-training.
+      Sequences are AbMAP-embedded by the adapter (cached in DB on first run).
+      Expected dataset columns: heavy_chain sequence + score_mean_rank0..3 columns.
+      Pre-training data has lowest priority — accumulated + current data overwrites it.
+
+  # ── Accumulated dataset (loop mode) ─────────────────────────────────────
+  - name: accumulated_dataset
+    type: json
+    required: false
+    default: null
+    description: >
+      Accumulated data from all previous loop iterations. Injected automatically
+      by the loop executor — do not wire manually.
+      Format: {"embeddings": {seq_id: [float]}, "scores_rank_1": {seq_id: float}, ...}
+
+  # ── Embeddings ───────────────────────────────────────────────────────────
+  - name: embeddings
+    type: json
+    required: false
+    default: null
+    description: >
+      Training embeddings for the CURRENT round — {seq_id: [float, ...]} (AbMAP 512-dim).
+
+  - name: candidate_embeddings
+    type: json
+    required: false
+    default: null
+    description: >
+      Embeddings for new candidate sequences to score. Same format as embeddings.
+
+  # ── Scores per rank ──────────────────────────────────────────────────────
+  - name: scores_rank_1
+    type: json
+    required: true
+    default: null
+    description: "Scores for rank 1 — {seq_id: float}. Lower is better for HADDOCK."
+
+  - name: scores_rank_2
+    type: json
+    required: false
+    default: null
+    description: "Scores for rank 2 (optional)."
+
+  - name: scores_rank_3
+    type: json
+    required: false
+    default: null
+    description: "Scores for rank 3 (optional)."
+
+  - name: scores_rank_4
+    type: json
+    required: false
+    default: null
+    description: "Scores for rank 4 (optional)."
+
+  # ── Mode ─────────────────────────────────────────────────────────────────────
+  - name: mode
+    type: str
+    required: false
+    default: "train"
+    options:
+      - "train"
+      - "score"
+    description: >
+      train: fit the DNN committee on embeddings + scores (use after HADDOCK).
+      score: inference only — uses model_artifact from an upstream train node
+             to score CDR candidates without retraining.
+
+  - name: epochs
+    type: int
+    required: false
+    default: 150
+    description: "Training epochs per committee member."
+
+  - name: lr
+    type: float
+    required: false
+    default: 0.0005
+    description: "Adam learning rate."
+
+  - name: batch_size
+    type: int
+    required: false
+    default: 128
+    description: "Mini-batch size during training."
+
+  # ── Committee params ─────────────────────────────────────────────────────
+  - name: n_committee
+    type: int
+    required: false
+    default: 5
+    description: >
+      Committee size M. Larger M → more stable uncertainty but slower.
+
+  - name: kappa_epi
+    type: float
+    required: false
+    default: 2.0
+    description: "Exploration weight for epistemic uncertainty (σ_epi)."
+
+  - name: kappa_conf
+    type: float
+    required: false
+    default: 0.5
+    description: "Penalty weight for conformational uncertainty (σ_conf)."
+
+  - name: rank_weights
+    type: json
+    required: false
+    default: null
+    description: "Per-rank importance weights [w1, w2, w3, w4]."
+
+  - name: top_k
+    type: int
+    required: false
+    default: 20
+    description: "Return this many top candidates sorted by acquisition score."
+
+  - name: lower_is_better
+    type: bool
+    required: false
+    default: true
+    description: "True for docking scores (HADDOCK). False for fitness/activity."
+
+outputs:
+  - name: acquisition_scores
+    type: json
+    description: "{seq_id: float} — α = μ̄ + κ_epi·σ_epi − κ_conf·σ_conf (higher is better)."
+
+  - name: top_sequences
+    type: json
+    description: "List of top-k seq_ids sorted by acquisition score."
+
+  - name: mean_predictions
+    type: json
+    description: "{seq_id: float} — rank-averaged committee mean prediction."
+
+  - name: epistemic_uncertainty
+    type: json
+    description: "{seq_id: float} — σ_epi (within-rank committee dispersion)."
+
+  - name: conformational_uncertainty
+    type: json
+    description: "{seq_id: float} — σ_conf (between-rank disagreement)."
+
+  - name: rank_predictions
+    type: json
+    description: "{rank_id: {seq_id: {mean, std}}} — per-rank predictions."
+
+  - name: model_artifact
+    type: json
+    description: "Serialized DNN committee weights (base64). Pass to dnn_mlde for fast re-scoring."
+
+  - name: metrics
+    type: json
+    description: "Training diagnostics: committee size, ranks, CV RMSE, dataset sizes."
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 1200

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.db.models import Base
 from app.db.session import get_db
 from app.main import app
+from app.tools.registry import tool_registry
 
 
 @pytest.fixture
@@ -23,6 +24,7 @@ async def client():
 
     app.dependency_overrides[get_db] = override_db
 
+    tool_registry.load()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
 

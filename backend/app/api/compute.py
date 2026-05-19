@@ -49,6 +49,7 @@ already bound in your Python environment — you do not need to import or define
 class _VarInfo(BaseModel):
     name: str
     type: str
+    description: str = ""  # schema hint shown to AI — e.g. column names, entry count
 
 
 class GenerateCodeRequest(BaseModel):
@@ -58,7 +59,13 @@ class GenerateCodeRequest(BaseModel):
 
 def _build_system_prompt(variables: list[_VarInfo]) -> str:
     if variables:
-        var_block = "\n".join(f"  {v.name}: {v.type}" for v in variables)
+        lines = []
+        for v in variables:
+            line = f"  {v.name}: {v.type}"
+            if v.description:
+                line += f"  # {v.description}"
+            lines.append(line)
+        var_block = "\n".join(lines)
     else:
         var_block = "  (no upstream variables connected yet)"
     vars_section = _PROMPT_VARS_TEMPLATE.format(var_block=var_block)
@@ -125,7 +132,19 @@ async def _exec_with_stream(
                     )
                 return n
 
-        namespace = dict(injected)
+        import collections, json as _json, math, re as _re
+        import numpy as np
+        import scipy
+
+        namespace = {
+            "np": np,
+            "scipy": scipy,
+            "math": math,
+            "re": _re,
+            "json": _json,
+            "collections": collections,
+            **injected,
+        }
         streaming_out = _StreamingIO()
         old_stdout = sys.stdout
         sys.stdout = streaming_out

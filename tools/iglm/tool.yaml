@@ -1,0 +1,193 @@
+id: iglm
+name: IgLM
+version: "0.2.0"
+category: sequence_design
+description: >
+  IgLM — Immunoglobulin Language Model (Gray Lab, Johns Hopkins). GPT2-based
+  autoregressive model trained on 558 M antibody sequences from OAS.
+  Three modes: infill redesigns a CDR region or custom range while preserving
+  flanking framework; generate creates sequences de novo; log_likelihood scores
+  naturalness. Outputs variant bundles (heavy_chain + light_chain +
+  log_likelihood score) that wire directly to ImmuneBuilder, AbMAP, etc.
+  CDR boundaries are detected automatically via IMGT/Kabat/Chothia numbering.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: false
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCARNDYWGQGTLVTVSS"
+    description: VH sequence. Used as the sequence to redesign for VH/both modes.
+
+  - name: light_chain
+    type: fasta
+    required: false
+    default: "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+    description: VL sequence. Passed through unchanged unless redesign_chain is vl or both.
+
+  - name: mode
+    type: str
+    required: false
+    default: "infill"
+    options:
+      - "infill"
+      - "generate"
+      - "log_likelihood"
+    description: >
+      infill: redesign the selected CDR region of the target chain(s).
+      generate: produce new sequences from scratch (use heavy_chain as prompt).
+      log_likelihood: score heavy_chain naturalness; outputs a single score.
+
+  - name: redesign_chain
+    type: str
+    required: false
+    default: "vh"
+    options:
+      - "vh"
+      - "vl"
+      - "both"
+    description: >
+      vh: infill the VH only; VL passes through unchanged.
+      vl: infill the VL only; VH passes through unchanged.
+      both: infill VH (using infill_region) and VL (using vl_region) independently,
+            then combine into paired VH+VL variant bundles.
+
+  - name: infill_region
+    type: str
+    required: false
+    default: "cdr_h3"
+    options:
+      - "cdr_h1"
+      - "cdr_h2"
+      - "cdr_h3"
+      - "cdr_l1"
+      - "cdr_l2"
+      - "cdr_l3"
+      - "custom"
+    description: >
+      CDR region to redesign. For redesign_chain=vh use a cdr_h* region; for vl use cdr_l*.
+      When redesign_chain=both, the matching opposite-chain CDR is auto-selected
+      (cdr_h3→cdr_l3, cdr_h2→cdr_l2, cdr_h1→cdr_l1). Use custom for exact positions.
+      Boundaries are detected automatically using the chosen numbering scheme.
+
+  - name: scheme
+    type: str
+    required: false
+    default: "imgt"
+    options:
+      - "imgt"
+      - "kabat"
+      - "chothia"
+    description: Antibody numbering scheme for CDR boundary detection.
+
+  - name: custom_start
+    type: int
+    required: false
+    default: 0
+    description: >
+      0-indexed start position for custom infill region. Only used when infill_region is 'custom'.
+
+  - name: custom_end
+    type: int
+    required: false
+    default: 10
+    description: >
+      0-indexed end position (exclusive) for custom infill region.
+
+  - name: species
+    type: str
+    required: false
+    default: "human"
+    options:
+      - "human"
+      - "mouse"
+      - "rabbit"
+      - "rat"
+      - "rhesus"
+    description: Species conditioning token.
+
+  - name: num_sequences
+    type: int
+    required: false
+    default: 5
+    description: >
+      Number of unique variant sequences to generate (1–10 for canvas wiring).
+      Each variant gets its own output handle. Log-likelihood is computed for
+      every generated sequence automatically.
+
+  - name: temperature
+    type: float
+    required: false
+    default: 1.0
+    description: Sampling temperature. Lower = more conservative; higher = more diverse.
+
+  - name: top_p
+    type: float
+    required: false
+    default: 1.0
+    description: Nucleus sampling p.
+
+  - name: model_name
+    type: str
+    required: false
+    default: "IgLM"
+    options:
+      - "IgLM"
+      - "IgLM-S"
+    description: IgLM (full) or IgLM-S (smaller, faster).
+
+outputs:
+  # ── Per-variant bundles (wire to ImmuneBuilder, AbMAP, etc.) ─────────────
+  - name: variant_1
+    type: json
+    description: "Variant 1 — {heavy_chain, light_chain, log_likelihood} bundle."
+  - name: variant_2
+    type: json
+    description: "Variant 2 — {heavy_chain, light_chain, log_likelihood} bundle."
+  - name: variant_3
+    type: json
+    description: "Variant 3 — {heavy_chain, light_chain, log_likelihood} bundle."
+  - name: variant_4
+    type: json
+    description: "Variant 4 — {heavy_chain, light_chain, log_likelihood} bundle."
+  - name: variant_5
+    type: json
+    description: "Variant 5 — {heavy_chain, light_chain, log_likelihood} bundle."
+  - name: variant_6
+    type: json
+    description: "Variant 6 — {heavy_chain, light_chain, log_likelihood} bundle."
+  - name: variant_7
+    type: json
+    description: "Variant 7 — {heavy_chain, light_chain, log_likelihood} bundle."
+  - name: variant_8
+    type: json
+    description: "Variant 8 — {heavy_chain, light_chain, log_likelihood} bundle."
+  - name: variant_9
+    type: json
+    description: "Variant 9 — {heavy_chain, light_chain, log_likelihood} bundle."
+  - name: variant_10
+    type: json
+    description: "Variant 10 — {heavy_chain, light_chain, log_likelihood} bundle."
+
+  # ── Convenience aliases ───────────────────────────────────────────────────
+  - name: heavy_chain
+    type: fasta
+    description: "Best-scoring VH sequence (alias of variant_1.heavy_chain)."
+  - name: light_chain
+    type: fasta
+    description: "Best-scoring VL sequence (alias of variant_1.light_chain)."
+
+  # ── Log-likelihood mode output ────────────────────────────────────────────
+  - name: log_likelihood
+    type: json
+    description: "Log-likelihood score (log_likelihood mode). Higher = more natural."
+
+  - name: metadata
+    type: json
+    description: Mode, model, region, scheme, CDR boundaries found, sequence counts, scores.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 600
+
+paper_url: https://doi.org/10.1016/j.cels.2023.10.001

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Sparkles, Loader2, Check, Copy } from "lucide-react";
+import { Sparkles, Loader2, Check } from "lucide-react";
 import { workshopApi, type CustomTool } from "../api/workshop";
 
 interface Message {

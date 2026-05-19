@@ -22,6 +22,17 @@ def build_adjacency(pipeline: Pipeline) -> dict[str, list[str]]:
 
 def topological_sort(pipeline: Pipeline) -> list[str]:
     """Return nodes in execution order. Raises ValueError on cycles."""
+    node_ids = {node.id for node in pipeline.nodes}
+    for edge in pipeline.edges:
+        src = _node_id_from_port(edge.source)
+        tgt = _node_id_from_port(edge.target)
+        if src not in node_ids or tgt not in node_ids:
+            missing = src if src not in node_ids else tgt
+            raise ValueError(
+                f"Pipeline contains dangling edge {edge.source} -> {edge.target}; "
+                f"missing node {missing}"
+            )
+
     adj = build_adjacency(pipeline)
     in_degree: dict[str, int] = {n: 0 for n in adj}
     for neighbors in adj.values():
