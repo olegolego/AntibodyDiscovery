@@ -434,6 +434,67 @@ Schema reference:
 
 ---
 
+## 7.5 Register features in the Tool Feature Registry
+
+After writing your adapter, register any important scalar outputs in
+`backend/app/core/tool_features.py`. This makes them automatically captured
+when users export a run to a Dataset (via the "Dataset" button in RunPanel).
+
+**File layout** — add a block at the bottom of `tool_features.py`:
+
+```python
+# ── MyTool ─────────────────────────────────────────────────────────────────────
+register("my_tool", [
+    FeatureSpec(
+        "mt_best_score", "MyTool Best Score", "number",
+        lambda o: _safe(o.get("best_score")),
+    ),
+    FeatureSpec(
+        "mt_num_models", "MyTool Models", "number",
+        lambda o: _safe((o.get("metadata") or {}).get("num_models")),
+    ),
+    FeatureSpec(
+        "mt_task", "MyTool Task", "text",
+        lambda o: _safe_str(o.get("task")),
+    ),
+])
+```
+
+Use `register_prefix("my_tool")` instead of `register()` if your tool has variants
+(`my_tool_r1`, `my_tool_r2`, etc.) that all share the same output schema.
+
+**Rules (read before writing an extractor):**
+
+| Rule | Reason |
+|---|---|
+| Column IDs must be prefixed with your tool abbreviation (`mt_`) | Prevents collisions between tools |
+| Only register scalar values — `float`, `int`, `str`, `bool` | Large blobs (PDB, embeddings) don't belong in dataset columns |
+| Extractors must return `None` (not raise) on missing keys | The registry swallows exceptions, but a crashing lambda hides bugs |
+| Check for `"__artifact__"` sentinel before using a value | `_slim_outputs()` replaces strings > 512 chars with this sentinel |
+| Use `_safe()` for numeric conversions | loop_history stores all values as strings; `float(None)` raises |
+
+**Helper functions available in tool_features.py:**
+
+```python
+_safe(v)        # → float | None   (handles None, "__artifact__", non-numeric strings)
+_safe_int(v)    # → int | None
+_safe_str(v)    # → str | None     (returns None for blank strings and "__artifact__")
+```
+
+**Column types:** `"number"` | `"text"` | `"boolean"`
+
+**Verification:**
+```bash
+cd backend
+python3 -c "
+from app.core.tool_features import extract_features, all_features_for_pipeline
+print(extract_features('my_tool', {'best_score': -42.5, 'metadata': {'num_models': 3}}))
+print([s.col_id for s in all_features_for_pipeline(['my_tool'])])
+"
+```
+
+---
+
 ## 8. Add the analysis visualization
 
 ### Structure output
@@ -733,6 +794,7 @@ Any tool using `torch < 2.2` will fail with cryptic import errors (`ImportError:
 [ ] Adapter registered in tasks.py _ADAPTER_MAP
 [ ] Analysis saving added to executor.py if tool outputs structure/confidence
 [ ] Tool outputs registered in results_collector.py
+[ ] Important scalar outputs registered in tool_features.py (see § 7.5)
 [ ] hasAnalysis check updated in RunPanel.tsx
 [ ] Paper added to playground/papers.ts
 [ ] Test: drag node with no connections → Run → succeeds with defaults

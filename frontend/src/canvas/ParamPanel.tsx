@@ -293,6 +293,95 @@ function OutputModal({ name, type, value, onClose }: {
   );
 }
 
+// ── Developability check configurator ────────────────────────────────────────
+
+const DEV_CHECKS: { name: string; category: string; defaultMode: "hard" | "warn" | "off" }[] = [
+  { name: "N-glycosylation",  category: "PTM",          defaultMode: "hard" },
+  { name: "Deamidation",      category: "PTM",          defaultMode: "warn" },
+  { name: "Isomerization",    category: "PTM",          defaultMode: "warn" },
+  { name: "Oxidation-Trp",    category: "PTM",          defaultMode: "warn" },
+  { name: "Oxidation-Met",    category: "PTM",          defaultMode: "warn" },
+  { name: "DP-cleavage",      category: "PTM",          defaultMode: "warn" },
+  { name: "Aromatic-overload",category: "Biophysics",   defaultMode: "warn" },
+  { name: "Hydrophobic-patch",category: "Biophysics",   defaultMode: "warn" },
+  { name: "pI-extreme",       category: "Biophysics",   defaultMode: "warn" },
+  { name: "Net-charge-extreme",category:"Biophysics",   defaultMode: "warn" },
+  { name: "Polyspecificity",  category: "Instability",  defaultMode: "warn" },
+  { name: "CDR-H3-length",    category: "Instability",  defaultMode: "warn" },
+  { name: "Homopolymer",      category: "Instability",  defaultMode: "hard" },
+  { name: "Unpaired-Cys",     category: "Instability",  defaultMode: "hard" },
+];
+
+const DEV_DEFAULTS: Record<string, "hard" | "warn" | "off"> = Object.fromEntries(
+  DEV_CHECKS.map((c) => [c.name, c.defaultMode])
+) as Record<string, "hard" | "warn" | "off">;
+
+const MODE_STYLE: Record<string, string> = {
+  hard: "bg-red-500/20 border-red-500/40 text-red-300",
+  warn: "bg-amber-500/15 border-amber-500/30 text-amber-300",
+  off:  "bg-slate-700/30 border-slate-600/30 text-slate-500",
+};
+
+const CAT_COLOR: Record<string, string> = {
+  PTM:        "text-purple-400",
+  Biophysics: "text-sky-400",
+  Instability:"text-orange-400",
+};
+
+function DevelopabilityChecks({
+  config,
+  onChange,
+}: {
+  config: Record<string, string> | undefined;
+  onChange: (cfg: Record<string, string>) => void;
+}) {
+  const merged: Record<string, "hard" | "warn" | "off"> = { ...DEV_DEFAULTS, ...(config ?? {}) } as Record<string, "hard" | "warn" | "off">;
+
+  function cycle(name: string) {
+    const cur = merged[name] ?? "warn";
+    const next = cur === "hard" ? "warn" : cur === "warn" ? "off" : "hard";
+    onChange({ ...merged, [name]: next });
+  }
+
+  const categories = ["PTM", "Biophysics", "Instability"];
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Checks</span>
+        <div className="flex items-center gap-1.5 ml-auto text-[9px] font-medium">
+          {(["hard","warn","off"] as const).map((m) => (
+            <span key={m} className={`px-1.5 py-0.5 rounded border ${MODE_STYLE[m]}`}>{m}</span>
+          ))}
+        </div>
+      </div>
+      {categories.map((cat) => (
+        <div key={cat} className="flex flex-col gap-1">
+          <span className={`text-[9px] font-bold uppercase tracking-widest ${CAT_COLOR[cat]}`}>{cat}</span>
+          {DEV_CHECKS.filter((c) => c.category === cat).map((check) => {
+            const mode = merged[check.name] ?? check.defaultMode;
+            return (
+              <button
+                key={check.name}
+                onClick={() => cycle(check.name)}
+                className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border
+                  text-left transition-colors hover:opacity-80 ${MODE_STYLE[mode]}`}
+              >
+                <span className="text-[11px] font-medium">{check.name}</span>
+                <span className="text-[9px] font-bold uppercase tracking-wider opacity-70">{mode}</span>
+              </button>
+            );
+          })}
+        </div>
+      ))}
+      <p className="text-[10px] text-slate-600 leading-relaxed">
+        Click to cycle: <span className="text-red-400">hard</span> (always reject) →{" "}
+        <span className="text-amber-400">warn</span> (counts toward PTM budget) →{" "}
+        <span className="text-slate-500">off</span> (skip)
+      </p>
+    </div>
+  );
+}
+
 // ── Upstream input utilities ───────────────────────────────────────────────
 
 export interface UpstreamInput {
@@ -482,16 +571,27 @@ export function ParamPanel({ onOpenDNNDesigner }: ParamPanelProps = {}) {
             />
           )}
 
-          {/* ── Generic parameter loop (skip dataset-managed params) ────── */}
+          {/* ── Developability filter: check list ───────────────────────── */}
+          {tool.id === "developability_filter" && (
+            <DevelopabilityChecks
+              config={params.check_config as Record<string, string> | undefined}
+              onChange={(cfg) => handleChange("check_config", cfg)}
+            />
+          )}
+
+          {/* ── Generic parameter loop ──────────────────────────────────── */}
           {tool.inputs.filter((p) => {
+            if (p.panel_hidden) return false;
             if (p.type === "pdb") return false;
             if (tool.id === "custom_dnn" && p.name === "architecture_spec") return false;
             if (tool.id === "dataset" && DATASET_MANAGED_PARAMS.has(p.name)) return false;
+            if (tool.id === "developability_filter" && p.name === "check_config") return false;
             return true;
           }).map((port) => {
             const inputType = TYPE_INPUT[port.type] ?? "text";
             const value = params[port.name] ?? port.default ?? "";
             const isTextarea = port.type === "fasta" || port.type === "pdb";
+            const isCode = port.type === "python_code";
 
             return (
               <div key={port.name} className="flex flex-col gap-1.5">
@@ -529,6 +629,18 @@ export function ParamPanel({ onOpenDNNDesigner }: ParamPanelProps = {}) {
                     checked={Boolean(value)}
                     onChange={(e) => handleChange(port.name, e.target.checked)}
                     className="ml-3 w-4 h-4 accent-indigo-500"
+                  />
+                ) : isCode ? (
+                  <textarea
+                    value={String(value)}
+                    onChange={(e) => handleChange(port.name, e.target.value)}
+                    rows={14}
+                    spellCheck={false}
+                    placeholder={"# set next_heavy_chain and next_light_chain\nnext_heavy_chain = ..."}
+                    className="bg-canvas border border-cyan-800/40 rounded-lg px-3 py-2.5 text-xs
+                      font-mono text-slate-200 placeholder-slate-600 resize-y
+                      focus:outline-none focus:border-cyan-500/60 transition-colors w-full leading-relaxed"
+                    style={{ minHeight: "10rem", maxHeight: "60vh" }}
                   />
                 ) : isTextarea ? (
                   <textarea

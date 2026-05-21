@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, X, FlaskConical, Square, FileBarChart, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, X, FlaskConical, Square, FileBarChart, RefreshCw, Database } from "lucide-react";
 import { useRunWebSocket } from "@/hooks/useRunWebSocket";
 import { useCanvasStore } from "@/canvas/store";
+import { createDatasetFromRun, listDatasets } from "@/api/datasets";
+import type { Dataset } from "@/api/datasets";
 import type { LoopRun } from "@/api/loopRuns";
 import type { NodeRun, NodeRunStatus, Run, RunStatus } from "@/types";
 
@@ -240,6 +242,39 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
   const setRunNodeOutputs = useCanvasStore((s) => s.setRunNodeOutputs);
   const runNodeStatuses = useCanvasStore((s) => s.runNodeStatuses);
 
+  // ── Save-to-dataset state ────────────────────────────────────────────────────
+  const [showSave, setShowSave] = useState(false);
+  const [saveMode, setSaveMode] = useState<"new" | "existing">("new");
+  const [saveName, setSaveName] = useState("");
+  const [saveTargetId, setSaveTargetId] = useState("");
+  const [savingDs, setSavingDs] = useState(false);
+  const [saveResult, setSaveResult] = useState<{ name: string; count: number } | null>(null);
+  const [saveError, setSaveError] = useState("");
+  const [existingDs, setExistingDs] = useState<Dataset[]>([]);
+
+  useEffect(() => {
+    if (!showSave) return;
+    listDatasets().then(setExistingDs).catch(() => {});
+  }, [showSave]);
+
+  async function handleSaveDataset() {
+    setSavingDs(true);
+    setSaveError("");
+    try {
+      const result = await createDatasetFromRun({
+        loop_run_id: loopRunId ?? null,
+        run_id: !loopRunId ? (runId ?? null) : null,
+        dataset_id: saveMode === "existing" ? (saveTargetId || null) : null,
+        name: saveMode === "new" ? (saveName.trim() || "Dataset from run") : undefined,
+      });
+      setSaveResult({ name: result.name, count: result.added_count });
+    } catch (err: unknown) {
+      setSaveError((err as { message?: string })?.message ?? "Failed to save dataset");
+    } finally {
+      setSavingDs(false);
+    }
+  }
+
   useEffect(() => {
     if (!runId) return;
     fetch(`/api/runs/${runId}/`)
@@ -307,6 +342,9 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
 
   const isLoop = !!loopRunId && !!loopData;
   const loopDone = loopData?.status !== "running";
+  const canSave = isLoop
+    ? loopDone && (loopData?.run_ids.length ?? 0) > 0
+    : run?.status === "succeeded" || run?.status === "failed";
   const loopProgress = loopData
     ? Math.round((loopData.run_ids.length / loopData.max_iterations) * 100)
     : 0;
@@ -333,6 +371,20 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
             >
               <FileBarChart size={10} />
               Report
+            </button>
+          )}
+          {canSave && (
+            <button
+              onClick={() => { setShowSave((v) => !v); setSaveResult(null); setSaveError(""); }}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
+                transition-colors border
+                ${showSave
+                  ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
+                  : "text-slate-300 bg-white/5 border-border hover:bg-white/10 hover:text-white"
+                }`}
+            >
+              <Database size={10} />
+              Dataset
             </button>
           )}
           {!isLoop && run?.status === "running" && (
@@ -371,6 +423,83 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
           </button>
         </div>
       </div>
+
+      {/* ── Save-to-dataset panel ── */}
+      {showSave && (
+        <div className="shrink-0 border-b border-border bg-[#0e1425] px-4 py-3 space-y-2.5">
+          <div className="text-xs font-semibold text-white">Save to Dataset</div>
+
+          {/* Mode toggle */}
+          <div className="flex gap-1 p-0.5 bg-canvas rounded-lg w-fit">
+            {(["new", "existing"] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => { setSaveMode(m); setSaveResult(null); }}
+                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors
+                  ${saveMode === m ? "bg-indigo-600 text-white" : "text-slate-500 hover:text-slate-300"}`}
+              >
+                {m === "new" ? "New dataset" : "Add to existing"}
+              </button>
+            ))}
+          </div>
+
+          {saveMode === "new" && (
+            <input
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+              placeholder="Dataset name…"
+              className="w-full bg-canvas border border-border rounded-lg px-3 py-1.5 text-sm
+                text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/60"
+            />
+          )}
+
+          {saveMode === "existing" && (
+            <select
+              value={saveTargetId}
+              onChange={(e) => setSaveTargetId(e.target.value)}
+              className="w-full bg-canvas border border-border rounded-lg px-3 py-1.5 text-sm
+                text-white focus:outline-none focus:border-indigo-500/60"
+            >
+              <option value="">Select dataset…</option>
+              {existingDs.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.entry_count} rows)
+                </option>
+              ))}
+            </select>
+          )}
+
+          {saveResult && (
+            <div className="text-xs text-emerald-400 font-medium">
+              ✓ Added {saveResult.count} rows to "{saveResult.name}"
+            </div>
+          )}
+          {saveError && (
+            <div className="text-xs text-red-400 leading-snug">{saveError}</div>
+          )}
+
+          <div className="flex gap-2 pt-0.5">
+            <button
+              onClick={() => { setShowSave(false); setSaveResult(null); setSaveError(""); }}
+              className="flex-1 px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white
+                border border-border transition-colors"
+            >
+              {saveResult ? "Close" : "Cancel"}
+            </button>
+            {!saveResult && (
+              <button
+                onClick={handleSaveDataset}
+                disabled={savingDs || (saveMode === "existing" && !saveTargetId)}
+                className="flex-1 px-3 py-1.5 rounded-lg text-xs font-semibold
+                  bg-emerald-600 hover:bg-emerald-500 text-white
+                  disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {savingDs ? "Saving…" : "Save"}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {/* ── Loop summary banner ── */}

@@ -8,6 +8,7 @@ export interface PortSpec {
   default?: unknown;
   description: string;
   options?: string[];
+  panel_hidden?: boolean;
 }
 
 export interface RuntimeSpec {

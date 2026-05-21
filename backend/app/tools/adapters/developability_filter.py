@@ -1,10 +1,8 @@
 """Developability Filter adapter — calls tools/developability_filter/run.py.
 
-Pure-stdlib runner; uses the backend Python interpreter (no extra deps needed).
-Collects variant_1..8 bundles and acquisition_scores from inputs, passes them
-to the subprocess, and logs the pass/fail summary.
+Uses the biophi conda env (has abnumber) for scheme-aware CDR detection.
 """
-import sys
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +10,10 @@ from app.models.tool_spec import ToolSpec
 from app.tools.base import RunContext
 from app.tools.subprocess_runner import run_tool_subprocess
 
-_PYTHON = Path(sys.executable)
+_PYTHON = Path(
+    os.getenv("CDR_MUTATOR_PYTHON",
+              os.getenv("BIOPHI_CONDA_ENV", "/Users/oswaldkid/miniforge3/envs/biophi"))
+) / "bin" / "python"
 
 
 class DevelopabilityFilterAdapter:
@@ -22,12 +23,23 @@ class DevelopabilityFilterAdapter:
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
         payload: dict[str, Any] = {}
 
-        n_variants = 0
-        for i in range(1, 9):
-            v = inputs.get(f"variant_{i}")
-            if v:
-                payload[f"variant_{i}"] = v
-                n_variants += 1
+        # List-format inputs from cdr_mutator (preferred)
+        vh_list = inputs.get("heavy_chain_variants")
+        vl_list = inputs.get("light_chain_variants")
+        if vh_list is not None:
+            payload["heavy_chain_variants"] = vh_list
+        if vl_list is not None:
+            payload["light_chain_variants"] = vl_list
+
+        n_variants = len(vh_list) if isinstance(vh_list, list) else 0
+
+        # Legacy bundle-format inputs (variant_1 … variant_8)
+        if not n_variants:
+            for i in range(1, 9):
+                v = inputs.get(f"variant_{i}")
+                if v:
+                    payload[f"variant_{i}"] = v
+                    n_variants += 1
 
         acq = inputs.get("acquisition_scores")
         if acq:
@@ -40,6 +52,10 @@ class DevelopabilityFilterAdapter:
         hard_fails = inputs.get("hard_fail_checks")
         if hard_fails is not None:
             payload["hard_fail_checks"] = hard_fails
+
+        scheme = inputs.get("scheme")
+        if scheme:
+            payload["scheme"] = scheme
 
         await run_ctx.alog(f"Developability filter: assessing {n_variants} variants…")
 

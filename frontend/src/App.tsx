@@ -192,11 +192,24 @@ export default function App() {
         onBack={() => setPage("canvas")}
         onOpenRun={(run: Run) => {
           const snapshot = run.pipeline_snapshot as unknown as Pipeline;
+          const targetPipelineId = snapshot.id ?? run.pipeline_id;
           loadPipeline(snapshot, tools ?? []);
           setPipelineName(snapshot.name ?? "Untitled pipeline");
-          setPipelineId(snapshot.id ?? run.pipeline_id);
+          setPipelineId(targetPipelineId);
           localStorage.setItem("pdp_pipeline_name", snapshot.name ?? "Untitled pipeline");
-          localStorage.setItem(PIPELINE_ID_KEY, snapshot.id ?? run.pipeline_id);
+          localStorage.setItem(PIPELINE_ID_KEY, targetPipelineId);
+          // Re-sync canvas from DB so any corrections (e.g. fixed edges) override the
+          // potentially stale snapshot baked into the run record.
+          fetch("/api/pipelines/")
+            .then((r) => r.json())
+            .then((pipelines: Pipeline[]) => {
+              const saved = pipelines.find((p) => p.id === targetPipelineId);
+              if (saved && tools?.length) {
+                loadPipeline(saved, tools);
+                setPipelineName(saved.name ?? "Untitled pipeline");
+              }
+            })
+            .catch(() => {});
           setRunId(run.id);
           localStorage.setItem(RUN_KEY, run.id);
           // If this run belongs to a loop campaign, restore the loop panel

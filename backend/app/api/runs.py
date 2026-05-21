@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel as _Base
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -211,24 +212,28 @@ async def submit_run(pipeline: Pipeline, background_tasks: BackgroundTasks):
     return run
 
 
-@router.get("/", response_model=list[Run])
+@router.get("/")
 async def list_runs(db: AsyncSession = Depends(get_db)):
     rows = (await db.execute(select(RunRow).order_by(RunRow.created_at.desc()).limit(100))).scalars().all()
     result = []
     for r in rows:
-        run = Run.model_validate_json(r.data)
-        if not run.created_at:
-            run.created_at = r.created_at.isoformat()
-        # Strip large payload — list view only needs status, errors, and node IDs.
-        # Full data (outputs, logs, pipeline params) is available via GET /runs/{id}/.
-        for node in run.nodes.values():
-            node.outputs = {}
-            node.logs = []
-        snap = run.pipeline_snapshot
+        # Use raw JSON parse instead of full Pydantic validation — avoids deserializing
+        # large logs/outputs blobs that the list view doesn't need.
+        raw: dict = json.loads(r.data)
+        if not raw.get("created_at"):
+            raw["created_at"] = r.created_at.isoformat()
+        # Drop per-node outputs and logs in-place (can be megabytes for long runs)
+        for node in raw.get("nodes", {}).values():
+            node.pop("outputs", None)
+            node.pop("logs", None)
+        # Drop pipeline snapshot edges and node params
+        snap = raw.get("pipeline_snapshot") or {}
+        snap.pop("edges", None)
         for n in snap.get("nodes", []):
-            n["params"] = {}
-        result.append(run)
-    return result
+            n.pop("params", None)
+        result.append(raw)
+    # Return as JSONResponse to skip FastAPI's response-side Pydantic serialization too
+    return JSONResponse(result)
 
 
 @router.get("/{run_id}/", response_model=Run)

@@ -20,32 +20,39 @@ import sys
 from typing import Any
 
 
-# ── CDR-H3 extraction ─────────────────────────────────────────────────────────
+# ── CDR detection via abnumber ────────────────────────────────────────────────
 
-_CDR_H3_RE = re.compile(
-    r"C([A-Z]{3,30?})(W(?:GQ|GK|GRG?|GS)|F(?:AY|GQ|DY|GY))",
-    re.IGNORECASE,
-)
+def _get_cdr_positions(seq: str, scheme: str) -> tuple[str, dict[str, list[int]]]:
+    """Return (chain_type, {cdr_name: [0-based seq indices]}) using abnumber.
 
-
-def _find_cdr_h3(vh: str) -> str:
-    """Return CDR-H3 sequence (between conserved Cys and Trp/Phe anchor)."""
-    m = _CDR_H3_RE.search(vh[-60:])  # CDR-H3 is always in the last 60 residues
-    if m:
-        return m.group(1)
-    # Fallback: last 15 residues before the final WGxG/FAY
-    m2 = re.search(r"([A-Z]{5,25})(WGQG|WGKG|WGRG|FAYG)", vh, re.IGNORECASE)
-    return m2.group(1) if m2 else vh[-20:-7]  # rough fallback
-
-
-def _cdr_h3_start(vh: str) -> int:
-    """0-based start index of CDR-H3 in vh string."""
-    offset = max(0, len(vh) - 60)
-    m = _CDR_H3_RE.search(vh[offset:])
-    if m:
-        return offset + m.start(1)
-    m2 = re.search(r"([A-Z]{5,25})(WGQG|WGKG|WGRG|FAYG)", vh, re.IGNORECASE)
-    return m2.start(1) if m2 else max(0, len(vh) - 20)
+    Mirrors the same function in cdr_mutator/run.py — supports both modern
+    (pos.is_in_cdr() / pos.get_region()) and older (pos.cdr) abnumber APIs.
+    Falls back to empty map if abnumber is unavailable.
+    """
+    from abnumber import Chain
+    try:
+        chain = Chain(seq.strip(), scheme=scheme, assign_germline=False)
+    except TypeError:
+        chain = Chain(seq.strip(), scheme=scheme)
+    _raw_ct: str = chain.chain_type
+    ct = "L" if _raw_ct in ("K", "L", "Kl") else _raw_ct
+    cdr_map: dict[str, list[int]] = {}
+    seq_idx = 0
+    for pos, _aa in chain:
+        in_cdr = False
+        cdr_num = None
+        if hasattr(pos, "is_in_cdr") and pos.is_in_cdr():
+            in_cdr = True
+            cdr_num = pos.get_region()[-1]   # "CDR1"[-1] → "1"
+        elif hasattr(pos, "cdr") and pos.cdr is not None:
+            in_cdr = True
+            cdr_num = pos.cdr[-1]
+        if in_cdr and cdr_num:
+            key = f"CDR_{ct}{cdr_num}"
+            cdr_map.setdefault(key, [])
+            cdr_map[key].append(seq_idx)
+        seq_idx += 1
+    return ct, cdr_map
 
 
 # ── Kyte-Doolittle hydrophobicity ─────────────────────────────────────────────
@@ -164,32 +171,28 @@ def _check_isomerization(vh: str) -> list[dict]:
     return hits
 
 
-def _check_oxidation(vh: str) -> list[dict]:
+def _check_oxidation(vh: str, cdr_positions: set[int]) -> list[dict]:
     """Met and Trp oxidation — relevant in CDR context.
     Stracke JO et al (2014) mAbs 6:1229-1242.  (Trp)
     Wei Z et al (2018) Anal Chem 90:5668-5675.  (Met)
     """
     hits = []
-    cdr_h3_start = _cdr_h3_start(vh)
     for i, aa in enumerate(vh.upper()):
-        if aa in ("W", "M"):
-            in_cdr = i >= cdr_h3_start or (30 <= i <= 36) or (50 <= i <= 66)
-            sev = "warn" if in_cdr else None
-            if sev:
-                name = "Oxidation-Trp" if aa == "W" else "Oxidation-Met"
-                desc = (
-                    f"{'Trp' if aa == 'W' else 'Met'} oxidation risk in CDR region — "
-                    "forms oxindole (Trp) or Met-sulfoxide, reducing binding affinity under oxidative stress."
-                )
-                cit = (
-                    "Stracke JO et al (2014) mAbs 6:1229." if aa == "W"
-                    else "Wei Z et al (2018) Anal Chem 90:5668."
-                )
-                hits.append({
-                    "check": name, "severity": sev,
-                    "sequence": aa, "position": i + 1,
-                    "description": desc, "citation": cit,
-                })
+        if aa in ("W", "M") and i in cdr_positions:
+            name = "Oxidation-Trp" if aa == "W" else "Oxidation-Met"
+            desc = (
+                f"{'Trp' if aa == 'W' else 'Met'} oxidation risk in CDR region — "
+                "forms oxindole (Trp) or Met-sulfoxide, reducing binding affinity under oxidative stress."
+            )
+            cit = (
+                "Stracke JO et al (2014) mAbs 6:1229." if aa == "W"
+                else "Wei Z et al (2018) Anal Chem 90:5668."
+            )
+            hits.append({
+                "check": name, "severity": "warn",
+                "sequence": aa, "position": i + 1,
+                "description": desc, "citation": cit,
+            })
     return hits
 
 
@@ -210,7 +213,7 @@ def _check_dp_cleavage(vh: str) -> list[dict]:
     ]
 
 
-def _check_aromatic_overload(vh: str, cdr_h3: str) -> list[dict]:
+def _check_aromatic_overload(cdr_h3: str, cdr_h3_pos: int) -> list[dict]:
     """Aromatic fraction in CDR-H3 > 0.15.
     Chennamsetty N et al (2009) PNAS 106:11937-11942.
     Hydrophobic hot-spots correlate with aggregation propensity.
@@ -223,7 +226,7 @@ def _check_aromatic_overload(vh: str, cdr_h3: str) -> list[dict]:
             "check": "Aromatic-overload",
             "severity": "warn",
             "sequence": cdr_h3,
-            "position": _cdr_h3_start(vh) + 1,
+            "position": cdr_h3_pos + 1,
             "description": f"CDR-H3 aromatic fraction {frac:.0%} > 15% — hydrophobic hot-spot associated with colloidal instability and aggregation propensity.",
             "citation": "Chennamsetty N et al (2009) PNAS 106:11937.",
         }]
@@ -351,17 +354,19 @@ def _check_unpaired_cys(vh: str) -> list[dict]:
 
 # ── Full sequence check ───────────────────────────────────────────────────────
 
-def _assess_vh(vh: str) -> list[dict]:
-    cdr_h3 = _find_cdr_h3(vh)
-    cdr_h3_pos = _cdr_h3_start(vh)
+def _assess_vh(vh: str, cdr_map: dict[str, list[int]]) -> list[dict]:
+    cdr_h3_indices = sorted(cdr_map.get("CDR_H3", []))
+    cdr_h3 = "".join(vh[i] for i in cdr_h3_indices if i < len(vh))
+    cdr_h3_pos = cdr_h3_indices[0] if cdr_h3_indices else max(0, len(vh) - 20)
+    all_cdr_positions: set[int] = {i for idxs in cdr_map.values() for i in idxs}
 
     hits: list[dict] = []
     hits.extend(_check_n_glycosylation(vh))
     hits.extend(_check_deamidation(vh))
     hits.extend(_check_isomerization(vh))
-    hits.extend(_check_oxidation(vh))
+    hits.extend(_check_oxidation(vh, all_cdr_positions))
     hits.extend(_check_dp_cleavage(vh))
-    hits.extend(_check_aromatic_overload(vh, cdr_h3))
+    hits.extend(_check_aromatic_overload(cdr_h3, cdr_h3_pos))
     hits.extend(_check_hydrophobic_patch(vh))
     hits.extend(_check_pi(vh))
     hits.extend(_check_net_charge(vh))
@@ -377,24 +382,53 @@ def _assess_vh(vh: str) -> list[dict]:
 def main() -> None:
     inp: dict[str, Any] = json.load(sys.stdin)
 
-    max_ptm     = int(inp.get("max_ptm_liabilities", 3))
-    hard_fails  = set(inp.get("hard_fail_checks") or ["N-glycosylation", "Unpaired-Cys", "Homopolymer"])
+    scheme: str = str(inp.get("scheme", "imgt")).strip().lower()
+    max_ptm = int(inp.get("max_ptm_liabilities", 3))
     acq_scores: dict[str, float] = inp.get("acquisition_scores") or {}
 
-    _PTM_CHECKS = {"N-glycosylation", "Deamidation", "Isomerization", "Oxidation-Trp", "Oxidation-Met", "DP-cleavage"}
+    # check_config: {check_name: "hard"|"warn"|"off"} — new format.
+    # Falls back to legacy hard_fail_checks + built-in PTM classification.
+    _DEFAULT_CONFIG: dict[str, str] = {
+        "N-glycosylation": "hard", "Deamidation": "warn", "Isomerization": "warn",
+        "Oxidation-Trp": "warn", "Oxidation-Met": "warn", "DP-cleavage": "warn",
+        "Aromatic-overload": "warn", "Hydrophobic-patch": "warn", "pI-extreme": "warn",
+        "Net-charge-extreme": "warn", "Polyspecificity": "warn", "CDR-H3-length": "warn",
+        "Homopolymer": "hard", "Unpaired-Cys": "hard",
+    }
+    check_config: dict[str, str] = dict(_DEFAULT_CONFIG)
+    if inp.get("check_config"):
+        check_config.update(inp["check_config"])
+    elif inp.get("hard_fail_checks"):
+        # Legacy: override hard-fail set from old param
+        for k in check_config:
+            check_config[k] = "hard" if k in inp["hard_fail_checks"] else check_config[k]
 
-    # Collect variants
+    hard_fails  = {k for k, v in check_config.items() if v == "hard"}
+    off_checks  = {k for k, v in check_config.items() if v == "off"}
+    _PTM_CHECKS = {k for k, v in check_config.items() if v == "warn"}
+
+    # Collect variants — prefer list inputs, fall back to legacy variant_N bundles
     variants: list[tuple[str, str]] = []   # (vh, vl)
-    for i in range(1, 9):
-        bundle = inp.get(f"variant_{i}") or {}
-        if isinstance(bundle, dict):
-            vh = str(bundle.get("heavy_chain") or "").strip().upper()
-            vl = str(bundle.get("light_chain") or "").strip().upper()
+    vh_list = inp.get("heavy_chain_variants") or []
+    vl_list = inp.get("light_chain_variants") or []
+    if isinstance(vh_list, list) and vh_list:
+        for i, vh in enumerate(vh_list):
+            vh = str(vh).strip().upper()
+            vl = str(vl_list[i]).strip().upper() if i < len(vl_list) else ""
             if vh and vh not in [v[0] for v in variants]:
                 variants.append((vh, vl))
+    else:
+        # Legacy: individual variant_N bundle inputs
+        for i in range(1, 11):
+            bundle = inp.get(f"variant_{i}") or {}
+            if isinstance(bundle, dict):
+                vh = str(bundle.get("heavy_chain") or "").strip().upper()
+                vl = str(bundle.get("light_chain") or "").strip().upper()
+                if vh and vh not in [v[0] for v in variants]:
+                    variants.append((vh, vl))
 
     if not variants:
-        print(json.dumps({"error": "No variant inputs provided (variant_1..variant_8)"}))
+        print(json.dumps({"error": "No variants provided. Wire cdr_mutator.heavy_chain_variants here."}))
         sys.exit(1)
 
     print(f"Assessing {len(variants)} variants…", file=sys.stderr)
@@ -403,7 +437,12 @@ def main() -> None:
     feasible: dict[str, Any] = {}
 
     for vh, vl in variants:
-        liabilities = _assess_vh(vh)
+        try:
+            _, cdr_map = _get_cdr_positions(vh, scheme)
+        except Exception as e:
+            print(f"  CDR detection failed for {vh[:20]}… ({e}) — CDR-dependent checks skipped", file=sys.stderr)
+            cdr_map = {}
+        liabilities = [h for h in _assess_vh(vh, cdr_map) if h["check"] not in off_checks]
 
         # Determine pass/fail
         hard_hit = any(h["check"] in hard_fails for h in liabilities)

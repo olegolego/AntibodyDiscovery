@@ -2,8 +2,8 @@
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
-from sqlalchemy import select, func
+from fastapi import APIRouter, HTTPException, Query
+from sqlalchemy import select, func, exists
 
 from app.core.molecule_key import MoleculeKey
 from app.db.models import (
@@ -13,6 +13,7 @@ from app.db.models import (
     DesignSequenceRow,
     EmbeddingRow,
     MoleculeRow,
+    PipelineRow,
     StructureRow,
 )
 from app.db.session import AsyncSessionLocal
@@ -25,6 +26,9 @@ from app.tools.molecule_cache import (
 
 router = APIRouter()
 
+# Tools whose design_sequence rows are considered intermediate (not final results).
+_INTERMEDIATE_DESIGN_TOOLS = {"cdr_mutator"}
+
 
 def _scores(raw: str | None) -> dict:
     if not raw:
@@ -35,16 +39,86 @@ def _scores(raw: str | None) -> dict:
         return {}
 
 
-@router.get("/molecules")
-async def list_molecules() -> list[dict[str, Any]]:
+_UNCATEGORIZED_ID = "__uncategorized__"
+
+# Correlated existence checks reused in multiple queries
+def _has_structure():
+    return exists(select(StructureRow.id).where(StructureRow.molecule_id == MoleculeRow.id))
+
+def _has_docking():
+    return exists(select(DockingResultRow.id).where(DockingResultRow.molecule_id == MoleculeRow.id))
+
+
+@router.get("/pipelines")
+async def list_pipelines_with_results() -> list[dict[str, Any]]:
+    """Return pipelines that have at least one scored molecule (structure or docking).
+
+    Molecules whose pipeline_id is NULL are grouped under the sentinel
+    pipeline_id '__uncategorized__' so old results are never hidden.
+    """
     async with AsyncSessionLocal() as db:
+        scored_filter = _has_structure() | _has_docking()
+
         rows = (await db.execute(
-            select(MoleculeRow).order_by(MoleculeRow.created_at.desc())
-        )).scalars().all()
+            select(
+                MoleculeRow.pipeline_id,
+                func.count(MoleculeRow.id.distinct()).label("molecule_count"),
+                func.max(MoleculeRow.created_at).label("last_activity"),
+            )
+            .where(scored_filter)
+            .group_by(MoleculeRow.pipeline_id)
+            .order_by(func.max(MoleculeRow.created_at).desc())
+        )).all()
+
+        # Resolve pipeline names for known IDs
+        known_ids = [r.pipeline_id for r in rows if r.pipeline_id]
+        pipelines: dict[str, str] = {}
+        if known_ids:
+            p_rows = (await db.execute(
+                select(PipelineRow).where(PipelineRow.id.in_(known_ids))
+            )).scalars().all()
+            pipelines = {p.id: p.name for p in p_rows}
+
+        result = []
+        for r in rows:
+            pid = r.pipeline_id or _UNCATEGORIZED_ID
+            if pid == _UNCATEGORIZED_ID:
+                name = "Previous runs"
+            else:
+                name = pipelines.get(pid, pid[:8])
+            result.append({
+                "pipeline_id": pid,
+                "pipeline_name": name,
+                "molecule_count": r.molecule_count,
+                "last_activity": r.last_activity.isoformat(),
+            })
+        return result
+
+
+@router.get("/molecules")
+async def list_molecules(
+    pipeline_id: str | None = Query(default=None),
+) -> list[dict[str, Any]]:
+    """List scored molecules (have at least one structure or docking result).
+
+    Optionally filtered to a single pipeline via ?pipeline_id=<id>.
+    """
+    async with AsyncSessionLocal() as db:
+        q = select(MoleculeRow).order_by(MoleculeRow.created_at.desc())
+
+        if pipeline_id:
+            if pipeline_id == _UNCATEGORIZED_ID:
+                q = q.where(MoleculeRow.pipeline_id.is_(None))
+            else:
+                q = q.where(MoleculeRow.pipeline_id == pipeline_id)
+
+        # Scored-only: only molecules that have at least one structure or docking result
+        q = q.where(_has_structure() | _has_docking())
+
+        rows = (await db.execute(q)).scalars().all()
 
         result = []
         for m in rows:
-            # Count linked records
             structs = (await db.execute(
                 select(func.count()).where(StructureRow.molecule_id == m.id)
             )).scalar() or 0
@@ -52,7 +126,10 @@ async def list_molecules() -> list[dict[str, Any]]:
                 select(func.count()).where(DockingResultRow.molecule_id == m.id)
             )).scalar() or 0
             designs = (await db.execute(
-                select(func.count()).where(DesignSequenceRow.molecule_id == m.id)
+                select(func.count()).where(
+                    DesignSequenceRow.molecule_id == m.id,
+                    DesignSequenceRow.tool_id.notin_(_INTERMEDIATE_DESIGN_TOOLS),
+                )
             )).scalar() or 0
 
             result.append({
@@ -91,7 +168,11 @@ async def get_molecule(molecule_id: str) -> dict[str, Any]:
         )).scalars().all()
 
         designs = (await db.execute(
-            select(DesignSequenceRow).where(DesignSequenceRow.molecule_id == molecule_id)
+            select(DesignSequenceRow)
+            .where(
+                DesignSequenceRow.molecule_id == molecule_id,
+                DesignSequenceRow.tool_id.notin_(_INTERMEDIATE_DESIGN_TOOLS),
+            )
             .order_by(DesignSequenceRow.created_at.asc())
         )).scalars().all()
 

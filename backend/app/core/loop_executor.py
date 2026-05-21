@@ -105,8 +105,8 @@ def _patch_pipeline(
         if iteration > 0 and next_vh and node["tool"] in ("sequence_input", "sequence_db", "loop_start"):
             node["params"] = {**node.get("params", {}), "heavy_chain": next_vh, "light_chain": next_vl or ""}
 
-        # Inject accumulated dataset into rcc_mlde / dnn_mlde training nodes
-        if node["tool"] in ("rcc_mlde", "dnn_mlde") and accumulated:
+        # Inject accumulated dataset into rcc_mlde / dnn_mlde / custom_dnn training nodes
+        if node["tool"] in ("rcc_mlde", "dnn_mlde", "custom_dnn") and accumulated:
             node["params"] = {**node.get("params", {}), "accumulated_dataset": accumulated}
 
     return Pipeline.model_validate(data)
@@ -133,12 +133,24 @@ def _extract_next_sequence(run: Run) -> tuple[str | None, str | None]:
     return None, None
 
 
-_ABMAP_TOOLS  = {"abmap"}
-_ESM_TOOLS    = {"esm_embedding"}
+_ABMAP_TOOLS   = {"abmap"}
+_ESM_TOOLS     = {"esm_embedding", "ablang", "cheap_embedding"}
 _HADDOCK_TOOLS = {"haddock3"}
+# Any tool that produces an embedding — used for history capture
+_EMBEDDING_TOOLS = _ABMAP_TOOLS | _ESM_TOOLS
 
-# Heuristic: extract the rank suffix from a node_id for HADDOCK3 nodes.
-# e.g. "haddock_r1" → "rank_1", "haddock3_rank2" → "rank_2", "h_2" → "rank_2"
+# Float output keys that count as a "score" for any non-HADDOCK scoring node.
+# A node named with a _r{N} suffix (e.g. deepsp_r1, netsolp_r2, biophi_r3) and
+# outputting one of these keys will be captured into haddock_scores for the DNN.
+_GENERIC_SCORE_KEYS = (
+    "score", "sap_score", "heavy_solubility", "heavy_usability",
+    "n_liabilities", "heavy_mutations", "humanness_score",
+    "solubility_score", "stability_score",
+)
+
+
+# Heuristic: extract the rank suffix from a node_id.
+# e.g. "haddock_r1" → "rank_1", "deepsp_r2" → "rank_2", "netsolp_r3" → "rank_3"
 def _haddock_rank(node_id: str) -> str | None:
     import re
     m = re.search(r"[r_](\d)$", node_id)
@@ -152,10 +164,12 @@ async def _build_history_entry(run_id: str, iteration: int, run: Run) -> dict[st
 
     Captures per-iteration:
       - vh / vl (sequence)
-      - embedding (AbMAP 512d vector for the evaluated sequence)
-      - haddock_scores: {"rank_1": float, "rank_2": float, ...} (per conformation)
+      - embedding (AbMAP/ESM/AbLang vector for the evaluated sequence)
+      - haddock_scores: {"rank_1": float, ...} — from HADDOCK nodes OR from any node
+        whose ID ends with _r{N} (e.g. deepsp_r1, netsolp_r2, biophi_r3) and
+        outputs a recognized numeric score key.
       - haddock_score (legacy single-score compat)
-    These are consumed by _patch_pipeline to build the accumulated_dataset for rcc_mlde.
+    These are consumed by _patch_pipeline to build the accumulated_dataset for dnn_mlde/rcc_mlde.
     """
     entry: dict[str, Any] = {"iteration": iteration}
 
@@ -165,32 +179,52 @@ async def _build_history_entry(run_id: str, iteration: int, run: Run) -> dict[st
         n["id"]: n["tool"] for n in pipeline.get("nodes", [])
     }
 
+    # Two-pass VH capture:
+    # Pass 1 — find the evaluated sequence (loop_end / compute next_heavy_chain).
+    #           This is the sequence that was actually scored by HADDOCK/docking.
+    # Pass 2 — fall back to loop_start heavy_chain if pass 1 found nothing.
+    # cdr_mutator outputs are intentionally excluded from both passes because they
+    # are intermediate candidates, not the final selected/evaluated sequence.
+    _CDR_MUTATION_TOOLS = {"cdr_mutator"}
     for node_id, node_run in run.nodes.items():
         if node_run.status != "succeeded":
             continue
         outs = node_run.outputs or {}
-        tool  = snap_tool.get(node_id, "")
-
-        # ── VH / VL ───────────────────────────────────────────────────
-        # Priority: loop_start > loop > abmap > other tools (NOT cdr_mutator which
-        # outputs a *mutated* sequence — we want the sequence that was actually
-        # evaluated by HADDOCK and embedded by AbMAP for the training data).
-        _CDR_MUTATION_TOOLS = {"cdr_mutator"}
-        if outs.get("heavy_chain") and "vh" not in entry and tool not in _CDR_MUTATION_TOOLS:
-            entry["vh"] = outs["heavy_chain"]
-        if outs.get("light_chain") and "vl" not in entry and tool not in _CDR_MUTATION_TOOLS:
-            entry["vl"] = outs["light_chain"]
         result = outs.get("result")
         if isinstance(result, dict):
             if result.get("next_heavy_chain") and "vh" not in entry:
                 entry["vh"] = result["next_heavy_chain"]
             if result.get("next_light_chain") and "vl" not in entry:
                 entry["vl"] = result["next_light_chain"]
+        # Direct next_heavy_chain output (some loop_end variants)
+        if outs.get("next_heavy_chain") and "vh" not in entry:
+            entry["vh"] = outs["next_heavy_chain"]
+        if outs.get("next_light_chain") and "vl" not in entry:
+            entry["vl"] = outs["next_light_chain"]
 
-        # ── AbMAP embedding ────────────────────────────────────────────
-        # Prefer the "train" AbMAP node (embeds the evaluated sequence) over the
-        # "cand" node (embeds CDR mutants for scoring). Fall back to any AbMAP node.
-        if tool in _ABMAP_TOOLS:
+    # Fall back: use loop_start / sequence_input if no evaluated sequence was found
+    for node_id, node_run in run.nodes.items():
+        if node_run.status != "succeeded":
+            continue
+        outs = node_run.outputs or {}
+        tool = snap_tool.get(node_id, "")
+        if tool in _CDR_MUTATION_TOOLS:
+            continue
+        if outs.get("heavy_chain") and "vh" not in entry:
+            entry["vh"] = outs["heavy_chain"]
+        if outs.get("light_chain") and "vl" not in entry:
+            entry["vl"] = outs["light_chain"]
+
+    for node_id, node_run in run.nodes.items():
+        if node_run.status != "succeeded":
+            continue
+        outs = node_run.outputs or {}
+        tool  = snap_tool.get(node_id, "")
+
+        # ── Embedding capture (AbMAP, ESM, AbLang, CHEAP) ─────────────
+        # Prefer the "train" node over "cand" node for the embedding used in
+        # the accumulated history (cand embeds candidates, not the evaluated seq).
+        if tool in _EMBEDDING_TOOLS:
             emb = outs.get("embedding")
             if isinstance(emb, list) and emb and isinstance(emb[0], (int, float)):
                 is_train = "train" in node_id.lower() and "cand" not in node_id.lower()
@@ -205,9 +239,21 @@ async def _build_history_entry(run_id: str, iteration: int, run: Run) -> dict[st
                 if isinstance(score_val, (int, float)):
                     rank_key = _haddock_rank(node_id) or "rank_1"
                     entry.setdefault("haddock_scores", {})[rank_key] = float(score_val)
-                    # Legacy compat
                     if "haddock_score" not in entry:
                         entry["haddock_score"] = float(score_val)
+
+        # ── Generic biophysical scores (deepsp_r1, netsolp_r2, biophi_r3, …) ──
+        # Any non-HADDOCK node whose ID ends with _r{N} and outputs a numeric
+        # key from _GENERIC_SCORE_KEYS is captured as a DNN training rank score.
+        rank_key = _haddock_rank(node_id)
+        if rank_key and tool not in _HADDOCK_TOOLS:
+            for sk in _GENERIC_SCORE_KEYS:
+                val = outs.get(sk)
+                if isinstance(val, (int, float)):
+                    entry.setdefault("haddock_scores", {})[rank_key] = float(val)
+                    if "haddock_score" not in entry:
+                        entry["haddock_score"] = float(val)
+                    break
 
     # Also pull docking scores from DB (existing path)
     try:

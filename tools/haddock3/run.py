@@ -437,6 +437,26 @@ def main() -> None:
                 cwd=d, label="clean_antigen"
             )
 
+        # Validate that pdb-tools produced a non-empty antigen.  If chain
+        # selection returned nothing (e.g. wrong chain ID, all-HETATM), fail
+        # with a clear message rather than letting topoaa raise an opaque error.
+        _antigen_clean_path = os.path.join(d, "antigen_clean.pdb")
+        _antigen_atom_lines = [
+            l for l in open(_antigen_clean_path).read().splitlines()
+            if l.startswith("ATOM")
+        ]
+        if not _antigen_atom_lines:
+            # Diagnose: show what chains are actually present in the raw file
+            _raw_chains_present = sorted({
+                l[21] for l in antigen_pdb.splitlines() if l.startswith("ATOM")
+            })
+            raise RuntimeError(
+                f"Antigen PDB has no ATOM records after cleaning "
+                f"(selected chains={_sel!r}, raw chains present={_raw_chains_present}). "
+                f"Set the 'antigen_chains' parameter to one of: {_raw_chains_present}"
+            )
+        _progress(f"Antigen cleaned — {len(_antigen_atom_lines)} ATOM lines, chains={_sel!r}")
+
         _progress(f"Detecting CDR residues via ANARCI ({numbering_scheme} scheme)…")
         _cdr1, _cdr2, _cdr3 = _detect_cdrs(_vh_for_cdr, scheme=numbering_scheme, scfv=nanobody and len(actual_chains) <= 1)
         active_cdr = _cdr1 + _cdr2 + _cdr3

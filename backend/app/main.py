@@ -42,6 +42,12 @@ async def _migrate(conn) -> None:
         except Exception:
             pass  # column already exists
 
+    # Indexes added post-launch (CREATE INDEX IF NOT EXISTS is idempotent)
+    for ddl in [
+        "CREATE INDEX IF NOT EXISTS ix_runs_created_at ON runs (created_at)",
+    ]:
+        await conn.execute(_sa.text(ddl))
+
 
 def _kill_orphaned_haddock() -> None:
     """Kill leftover HADDOCK/CNS processes from a previous server session.

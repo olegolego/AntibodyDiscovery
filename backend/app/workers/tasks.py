@@ -29,6 +29,7 @@ _ADAPTER_MAP = {
     "loop":              ("app.tools.adapters.loop",      "LoopAdapter"),
     "loop_start":        ("app.tools.adapters.loop_start", "LoopStartAdapter"),
     "loop_end":          ("app.tools.adapters.loop_end",   "LoopEndAdapter"),
+    "loop_objective":    ("app.tools.adapters.loop_objective", "LoopObjectiveAdapter"),
     "custom_dnn":        ("app.tools.adapters.custom_dnn", "CustomDNNAdapter"),
     "diffusion_design":  ("app.tools.adapters.toolbox",   "ToolboxAdapter"),
     "property_predictor":("app.tools.adapters.toolbox",   "ToolboxAdapter"),

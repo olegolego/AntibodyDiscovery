@@ -3,7 +3,7 @@ import os
 import uuid
 from datetime import datetime
 
-import httpx
+import anthropic as _anthropic
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -150,27 +150,18 @@ async def generate_pipeline(req: GenerateRequest) -> Pipeline:
         f"[Registered tool IDs available: {', '.join(registered_ids)}]"
     )
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "x-api-key": api_key,
-                "anthropic-version": "2023-06-01",
-                "content-type": "application/json",
-            },
-            json={
-                "model": "claude-sonnet-4-6",
-                "max_tokens": 4096,
-                "system": _PIPELINE_SYSTEM_PROMPT.strip(),
-                "messages": [{"role": "user", "content": enriched_prompt}],
-            },
+    client = _anthropic.AsyncAnthropic(api_key=api_key)
+    try:
+        msg = await client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=_PIPELINE_SYSTEM_PROMPT.strip(),
+            messages=[{"role": "user", "content": enriched_prompt}],
         )
+    except _anthropic.APIError as exc:
+        raise HTTPException(status_code=502, detail=f"Claude API error: {exc}") from exc
 
-    if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Claude API error: {resp.text[:400]}")
-
-    body = resp.json()
-    raw = body["content"][0]["text"].strip()
+    raw = msg.content[0].text.strip()
 
     # Strip markdown fences if Claude wrapped it anyway
     if raw.startswith("```"):

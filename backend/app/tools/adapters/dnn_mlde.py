@@ -268,14 +268,17 @@ class DNNMLDEAdapter:
         if candidate_sequence and candidate_emb and list(candidate_emb.keys()) == ["seq_0"]:
             candidate_emb = {candidate_sequence: candidate_emb["seq_0"]}
 
-        scores_rank_1 = _coerce_scores(inputs.get("scores_rank_1"))
-        scores_rank_2 = _coerce_scores(inputs.get("scores_rank_2"))
-        scores_rank_3 = _coerce_scores(inputs.get("scores_rank_3"))
-        scores_rank_4 = _coerce_scores(inputs.get("scores_rank_4"))
+        scores_by_rank = {
+            k: _coerce_scores(v)
+            for k, v in inputs.items()
+            if k.startswith("scores_rank_") and v
+        }
+        # Keep individual variables for compat with downstream logic
+        scores_rank_1 = scores_by_rank.get("scores_rank_1")
         model_artifact_in = inputs.get("model_artifact")
         accumulated = inputs.get("accumulated_dataset")
 
-        n_ranks = sum(1 for s in [scores_rank_1, scores_rank_2, scores_rank_3, scores_rank_4] if s)
+        n_ranks = sum(1 for s in scores_by_rank.values() if s)
         explicit_mode = str(inputs.get("mode") or "").strip().lower()
         if explicit_mode == "train":
             mode = "train+score"
@@ -329,14 +332,9 @@ class DNNMLDEAdapter:
             payload["embeddings"] = embeddings
         if candidate_emb:
             payload["candidate_embeddings"] = candidate_emb
-        if scores_rank_1:
-            payload["scores_rank_1"] = scores_rank_1
-        if scores_rank_2:
-            payload["scores_rank_2"] = scores_rank_2
-        if scores_rank_3:
-            payload["scores_rank_3"] = scores_rank_3
-        if scores_rank_4:
-            payload["scores_rank_4"] = scores_rank_4
+        for rank_key, rank_val in scores_by_rank.items():
+            if rank_val:
+                payload[rank_key] = rank_val
         if model_artifact_in:
             payload["model_artifact"] = model_artifact_in
         rank_weights = inputs.get("rank_weights")

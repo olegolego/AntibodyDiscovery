@@ -1,10 +1,20 @@
 import { useState } from "react";
 import ReactDOM from "react-dom";
-import { ArrowLeft, BookOpen, Database, Dna, FlaskConical, Layers, Play, X, Zap } from "lucide-react";
+import {
+  ArrowLeft, BookOpen, Database, Dna, FlaskConical, Layers,
+  Play, GitBranch, X, Zap,
+} from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listDatasets, createDataset, addEntry } from "@/api/datasets";
 
-// ── API ───────────────────────────────────────────────────────────────────────
+// ── API types ─────────────────────────────────────────────────────────────────
+
+interface PipelineSummary {
+  pipeline_id: string;
+  pipeline_name: string;
+  molecule_count: number;
+  last_activity: string;
+}
 
 interface MoleculeSummary {
   id: string;
@@ -12,6 +22,7 @@ interface MoleculeSummary {
   heavy_chain: string | null;
   light_chain: string | null;
   run_id: string | null;
+  pipeline_id: string | null;
   created_at: string;
   counts: { structures: number; docking_results: number; design_sequences: number };
 }
@@ -34,8 +45,16 @@ interface MoleculeDetail extends MoleculeSummary {
   embeddings: Array<{ id: string; tool_id: string; run_id: string; created_at: string }>;
 }
 
-async function fetchMolecules(): Promise<MoleculeSummary[]> {
-  const r = await fetch("/api/results/molecules/");
+// ── API fetchers ──────────────────────────────────────────────────────────────
+
+async function fetchPipelines(): Promise<PipelineSummary[]> {
+  const r = await fetch("/api/results/pipelines");
+  if (!r.ok) throw new Error("Failed to fetch pipelines");
+  return r.json();
+}
+
+async function fetchMolecules(pipelineId: string): Promise<MoleculeSummary[]> {
+  const r = await fetch(`/api/results/molecules?pipeline_id=${pipelineId}`);
   if (!r.ok) throw new Error("Failed to fetch molecules");
   return r.json();
 }
@@ -57,6 +76,41 @@ function ts(iso: string): string {
   return new Date(iso).toLocaleString(undefined, {
     month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   });
+}
+
+// ── Pipeline list ─────────────────────────────────────────────────────────────
+
+function PipelineCard({
+  p, onClick,
+}: { p: PipelineSummary; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="w-full text-left flex items-center gap-4 px-5 py-4 border-b border-border
+        hover:bg-surface2 transition-colors group"
+    >
+      <div className="w-10 h-10 rounded-xl bg-indigo-900/40 border border-indigo-700/30
+        flex items-center justify-center shrink-0">
+        <GitBranch size={16} className="text-indigo-400" />
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <div className="text-sm font-semibold text-white truncate mb-0.5">
+          {p.pipeline_name}
+        </div>
+        <div className="text-xs text-slate-500 font-mono truncate">{p.pipeline_id.slice(0, 12)}</div>
+      </div>
+
+      <div className="shrink-0 text-right">
+        <div className="text-sm font-bold text-indigo-300 mb-0.5">
+          {p.molecule_count} <span className="text-xs font-normal text-slate-500">
+            molecule{p.molecule_count !== 1 ? "s" : ""}
+          </span>
+        </div>
+        <div className="text-[11px] text-slate-600">{ts(p.last_activity)}</div>
+      </div>
+    </button>
+  );
 }
 
 // ── Molecule list ─────────────────────────────────────────────────────────────
@@ -255,7 +309,17 @@ function SaveToLibraryModal({ mol, onClose }: { mol: MoleculeDetail; onClose: ()
   return ReactDOM.createPortal(modal, document.body);
 }
 
-function MoleculeDetail({ id, onBack, onOpenRun }: { id: string; onBack: () => void; onOpenRun: (runId: string) => void }) {
+function MoleculeDetail({
+  id,
+  pipelineName,
+  onBack,
+  onOpenRun,
+}: {
+  id: string;
+  pipelineName: string;
+  onBack: () => void;
+  onOpenRun: (runId: string) => void;
+}) {
   const { data, isLoading } = useQuery({
     queryKey: ["molecule", id],
     queryFn: () => fetchMolecule(id),
@@ -268,15 +332,15 @@ function MoleculeDetail({ id, onBack, onOpenRun }: { id: string; onBack: () => v
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div className="shrink-0 flex items-center gap-3 px-4 py-3 border-b border-border bg-surface">
+      <div className="shrink-0 flex items-center gap-2 px-4 py-3 border-b border-border bg-surface text-xs text-slate-500">
         <button onClick={onBack}
-          className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-white transition-colors">
-          <ArrowLeft size={13} /> All molecules
+          className="flex items-center gap-1.5 hover:text-white transition-colors">
+          <ArrowLeft size={12} /> {pipelineName}
         </button>
         <span className="text-slate-700">/</span>
-        <Dna size={13} className="text-indigo-400" />
-        <span className="text-sm font-semibold text-white">{data.name ?? "unnamed"}</span>
-        <span className="text-[10px] font-mono text-slate-600">{data.id}</span>
+        <Dna size={12} className="text-indigo-400" />
+        <span className="text-white font-semibold">{data.name ?? "unnamed"}</span>
+        <span className="font-mono text-slate-600">{data.id.slice(0, 8)}</span>
       </div>
 
       <div className="flex-1 overflow-y-auto p-5">
@@ -359,7 +423,7 @@ function MoleculeDetail({ id, onBack, onOpenRun }: { id: string; onBack: () => v
           ))}
         </DetailSection>
 
-        {/* Design sequences */}
+        {/* Design sequences (final design tools only — cdr_mutator filtered server-side) */}
         <DetailSection title="Designed Sequences" count={data.design_sequences.length} color="#34d399">
           {data.design_sequences.map((ds) => (
             <div key={ds.id}
@@ -394,77 +458,153 @@ interface ResultsPageProps {
 }
 
 export function ResultsPage({ onBack, onOpenRun }: ResultsPageProps) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const { data: molecules, isLoading } = useQuery({
-    queryKey: ["molecules"],
-    queryFn: fetchMolecules,
+  const [selectedPipeline, setSelectedPipeline] = useState<PipelineSummary | null>(null);
+  const [selectedMoleculeId, setSelectedMoleculeId] = useState<string | null>(null);
+
+  const { data: pipelines, isLoading: pipelinesLoading } = useQuery({
+    queryKey: ["result-pipelines"],
+    queryFn: fetchPipelines,
     refetchInterval: 10_000,
   });
 
-  return (
-    <div className="flex flex-col h-screen overflow-hidden bg-canvas">
-      <div
-        className="h-12 shrink-0 border-b border-border flex items-center px-4 gap-4"
-        style={{ background: "linear-gradient(90deg, #0e1425 0%, #111830 100%)" }}
-      >
+  const { data: molecules, isLoading: moleculesLoading } = useQuery({
+    queryKey: ["molecules", selectedPipeline?.pipeline_id],
+    queryFn: () => fetchMolecules(selectedPipeline!.pipeline_id),
+    enabled: !!selectedPipeline,
+    refetchInterval: 10_000,
+  });
+
+  // ── Breadcrumb / title ──
+  let headerLeft: React.ReactNode;
+  if (!selectedPipeline) {
+    headerLeft = (
+      <>
         <button onClick={onBack}
           className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors">
           <ArrowLeft size={15} /> Back to Canvas
         </button>
         <div className="w-px h-4 bg-border" />
         <Database size={14} className="text-indigo-400" />
-        <span className="text-sm font-bold text-white">Results Database</span>
-        {molecules && (
-          <span className="text-xs text-slate-600">{molecules.length} molecule{molecules.length !== 1 ? "s" : ""}</span>
+        <span className="text-sm font-bold text-white">Results</span>
+        {pipelines && (
+          <span className="text-xs text-slate-600">
+            {pipelines.length} pipeline{pipelines.length !== 1 ? "s" : ""}
+          </span>
         )}
+      </>
+    );
+  } else {
+    headerLeft = (
+      <>
+        <button
+          onClick={() => { setSelectedPipeline(null); setSelectedMoleculeId(null); }}
+          className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
+        >
+          <ArrowLeft size={15} /> All Pipelines
+        </button>
+        <div className="w-px h-4 bg-border" />
+        <GitBranch size={14} className="text-indigo-400" />
+        <span className="text-sm font-bold text-white">{selectedPipeline.pipeline_name}</span>
+        {molecules && (
+          <span className="text-xs text-slate-600">
+            {molecules.length} molecule{molecules.length !== 1 ? "s" : ""}
+          </span>
+        )}
+      </>
+    );
+  }
 
-        {/* Legend */}
-        <div className="ml-auto flex items-center gap-4 text-[11px] text-slate-600">
-          <span className="flex items-center gap-1"><Layers size={10} className="text-sky-400" /> structures</span>
-          <span className="flex items-center gap-1"><FlaskConical size={10} className="text-orange-400" /> docking</span>
-          <span className="flex items-center gap-1"><Zap size={10} className="text-emerald-400" /> designed seqs</span>
-        </div>
+  return (
+    <div className="flex flex-col h-screen overflow-hidden bg-canvas">
+      {/* Header */}
+      <div
+        className="h-12 shrink-0 border-b border-border flex items-center px-4 gap-4"
+        style={{ background: "linear-gradient(90deg, #0e1425 0%, #111830 100%)" }}
+      >
+        {headerLeft}
+
+        {/* Legend — only when viewing molecules */}
+        {selectedPipeline && !selectedMoleculeId && (
+          <div className="ml-auto flex items-center gap-4 text-[11px] text-slate-600">
+            <span className="flex items-center gap-1"><Layers size={10} className="text-sky-400" /> structures</span>
+            <span className="flex items-center gap-1"><FlaskConical size={10} className="text-orange-400" /> docking</span>
+            <span className="flex items-center gap-1"><Zap size={10} className="text-emerald-400" /> designed seqs</span>
+          </div>
+        )}
       </div>
 
+      {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left: molecule list */}
-        <div className={`flex flex-col border-r border-border overflow-hidden
-          ${selectedId ? "w-96 shrink-0" : "flex-1"}`}>
-          <div className="shrink-0 px-4 py-2.5 border-b border-border bg-surface">
-            <span className="text-xs font-bold uppercase tracking-widest text-slate-500">Molecules</span>
-          </div>
+
+        {/* ── Pipeline list ── */}
+        {!selectedPipeline && (
           <div className="flex-1 overflow-y-auto">
-            {isLoading && (
+            {pipelinesLoading && (
               <div className="p-8 text-center text-slate-600 animate-pulse text-sm">Loading…</div>
             )}
-            {!isLoading && (!molecules || molecules.length === 0) && (
-              <div className="p-8 text-center">
-                <Database size={32} className="text-slate-700 mx-auto mb-3" />
-                <p className="text-slate-500 text-sm font-medium">No results yet</p>
-                <p className="text-slate-700 text-xs mt-1">
-                  Run a pipeline with Sequence Input — the results appear here automatically.
+            {!pipelinesLoading && (!pipelines || pipelines.length === 0) && (
+              <div className="p-12 text-center">
+                <Database size={36} className="text-slate-700 mx-auto mb-4" />
+                <p className="text-slate-500 text-sm font-medium">No scored results yet</p>
+                <p className="text-slate-700 text-xs mt-1 max-w-xs mx-auto">
+                  Run a pipeline that includes a structure prediction or docking node — results appear here automatically.
                 </p>
               </div>
             )}
-            {molecules?.map((mol) => (
-              <MoleculeRow
-                key={mol.id}
-                mol={mol}
-                onClick={() => setSelectedId(mol.id)}
+            {pipelines?.map((p) => (
+              <PipelineCard
+                key={p.pipeline_id}
+                p={p}
+                onClick={() => { setSelectedPipeline(p); setSelectedMoleculeId(null); }}
               />
             ))}
           </div>
-        </div>
+        )}
 
-        {/* Right: detail */}
-        {selectedId && (
-          <div className="flex-1 overflow-hidden flex flex-col">
-            <MoleculeDetail
-              id={selectedId}
-              onBack={() => setSelectedId(null)}
-              onOpenRun={(runId) => { onOpenRun(runId); onBack(); }}
-            />
-          </div>
+        {/* ── Molecule list + detail (side-by-side when detail open) ── */}
+        {selectedPipeline && (
+          <>
+            {/* Molecule list */}
+            <div className={`flex flex-col border-r border-border overflow-hidden
+              ${selectedMoleculeId ? "w-96 shrink-0" : "flex-1"}`}>
+              <div className="shrink-0 px-4 py-2.5 border-b border-border bg-surface">
+                <span className="text-xs font-bold uppercase tracking-widest text-slate-500">Molecules</span>
+              </div>
+              <div className="flex-1 overflow-y-auto">
+                {moleculesLoading && (
+                  <div className="p-8 text-center text-slate-600 animate-pulse text-sm">Loading…</div>
+                )}
+                {!moleculesLoading && (!molecules || molecules.length === 0) && (
+                  <div className="p-8 text-center">
+                    <Dna size={28} className="text-slate-700 mx-auto mb-3" />
+                    <p className="text-slate-500 text-sm font-medium">No scored molecules</p>
+                    <p className="text-slate-700 text-xs mt-1">
+                      Molecules appear once they have a predicted structure or docking result.
+                    </p>
+                  </div>
+                )}
+                {molecules?.map((mol) => (
+                  <MoleculeRow
+                    key={mol.id}
+                    mol={mol}
+                    onClick={() => setSelectedMoleculeId(mol.id)}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Molecule detail */}
+            {selectedMoleculeId && (
+              <div className="flex-1 overflow-hidden flex flex-col">
+                <MoleculeDetail
+                  id={selectedMoleculeId}
+                  pipelineName={selectedPipeline.pipeline_name}
+                  onBack={() => setSelectedMoleculeId(null)}
+                  onOpenRun={(runId) => { onOpenRun(runId); onBack(); }}
+                />
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

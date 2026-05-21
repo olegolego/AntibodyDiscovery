@@ -192,10 +192,18 @@ def main() -> None:
     inp = json.loads(sys.stdin.read())
 
     # ── Architecture ──────────────────────────────────────────────────────────
-    arch_spec = inp.get("architecture_spec") or _DEFAULT_SPEC
-    # Pull spec from a saved artifact if in inference mode
-    model_artifact_in = inp.get("model_artifact")
-    if model_artifact_in and not inp.get("architecture_spec"):
+    # A canvas edge wired to the wrong handle delivers the full model artifact
+    # under the "architecture_spec" key instead of "model_artifact".  Detect
+    # this by checking for the "committees" key (only present in saved artifacts).
+    _raw_arch = inp.get("architecture_spec")
+    _raw_model = inp.get("model_artifact")
+    if _raw_arch and not _raw_model and isinstance(_raw_arch, dict) and "committees" in _raw_arch:
+        _raw_model = _raw_arch
+        _raw_arch = None
+
+    arch_spec = _raw_arch or _DEFAULT_SPEC
+    model_artifact_in = _raw_model
+    if model_artifact_in and not _raw_arch:
         arch_spec = model_artifact_in.get("architecture_spec") or arch_spec
 
     # ── Hyperparameters ───────────────────────────────────────────────────────
@@ -214,7 +222,7 @@ def main() -> None:
     accumulated = inp.get("accumulated_dataset") or {}
     current: dict[str, Any] = {
         "embeddings": inp.get("embeddings") or {},
-        **{k: inp[k] for k in ["scores_rank_1","scores_rank_2","scores_rank_3","scores_rank_4"] if inp.get(k)},
+        **{k: v for k, v in inp.items() if k.startswith("scores_rank_") and v},
     }
     embeddings, scores_by_rank_all = _merge_datasets(pretrain, accumulated, current)
     scores_by_rank = {k: v for k, v in scores_by_rank_all.items() if v}

@@ -119,6 +119,16 @@ export async function bulkAddEntries(
   return data;
 }
 
+export async function createDatasetFromRun(opts: {
+  run_id?: string | null;
+  loop_run_id?: string | null;
+  dataset_id?: string | null;
+  name?: string;
+}): Promise<Dataset & { added_count: number }> {
+  const { data } = await api.post<Dataset & { added_count: number }>("/datasets/from_run/", opts);
+  return data;
+}
+
 export async function importFromMolecules(
   dsId: string,
   moleculeIds: string[],

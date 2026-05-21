@@ -1,0 +1,40 @@
+id: loop_objective
+name: Loop Objective
+version: "1.0"
+category: loop
+description: >
+  User-defined objective function for active learning loops. Write Python that
+  combines upstream score outputs into a single numeric objective_score. All
+  connected upstream outputs are injected as {node_id}_{output_key} variables.
+  The result's "objective_score" is wired to dnn_train.scores_rank_1 — the DNN
+  learns to predict and maximize/minimize exactly what you define here.
+
+inputs:
+  - name: code
+    type: python_code
+    required: true
+    default: |
+      # All upstream scores are available as {node_id}_{key} variables.
+      # Examples:
+      #   deepsp_r1_sap_score, netsolp_r2_heavy_solubility, biophi_r1_heavy_mutations
+      #
+      # Combine them into a single objective (lower_is_better matches dnn_mlde setting).
+      # Example: minimize SAP and mutations, maximize solubility
+      sap   = float(deepsp_r1_sap_score or 0)
+      sol   = float(netsolp_r2_heavy_solubility or 0)
+      hum   = float(biophi_r1_heavy_mutations or 0)
+
+      # Lower is better composite (flip solubility so higher sol = lower penalty)
+      objective_score = 0.4 * sap + 0.4 * (1.0 - sol) + 0.2 * hum
+
+      result = {"objective_score": objective_score}
+
+outputs:
+  - name: objective_score
+    type: float
+    description: Composite objective value wired to dnn_train.scores_rank_1
+
+runtime:
+  kind: local_python
+  timeout_seconds: 60
+  gpu: false

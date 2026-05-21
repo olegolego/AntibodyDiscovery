@@ -280,7 +280,7 @@ async def execute_run(run_id: str) -> None:
                 inputs[k] = content if content is not None else v
             else:
                 inputs[k] = v
-        is_compute = node.tool in ("compute", "loop", "loop_end", "choose", "filter", "rank", "evaluate")
+        is_compute = node.tool in ("compute", "loop_objective", "loop", "loop_end", "choose", "filter", "rank", "evaluate")
 
         ctx = RunContext(run_id=run.id, node_id=node_id, node_run=node_run)
         ctx._emit_fn = lambda: _emit(run)

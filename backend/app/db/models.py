@@ -31,6 +31,8 @@ class RunRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+    __table_args__ = (Index("ix_runs_created_at", "created_at"),)
+
 
 class NodeAnalysisRow(Base):
     """Persists analysis results (structure, pLDDT, PAE) for every succeeded analysis node."""
