@@ -179,30 +179,38 @@ async def _build_history_entry(run_id: str, iteration: int, run: Run) -> dict[st
         n["id"]: n["tool"] for n in pipeline.get("nodes", [])
     }
 
-    # Two-pass VH capture:
-    # Pass 1 — find the evaluated sequence (loop_end / compute next_heavy_chain).
-    #           This is the sequence that was actually scored by HADDOCK/docking.
-    # Pass 2 — fall back to loop_start heavy_chain if pass 1 found nothing.
-    # cdr_mutator outputs are intentionally excluded from both passes because they
-    # are intermediate candidates, not the final selected/evaluated sequence.
+    # VH capture — two passes:
+    # Pass 1 — primary: capture the EVALUATED sequence from loop_start / sequence_input.
+    #           This is the sequence that was actually docked/scored in this iteration
+    #           and whose embedding+score belong together for training.
+    #           Also capture next_heavy_chain from loop_end as next_vh (for reference only).
+    # Pass 2 — fallback: any node (except cdr_mutator) that outputs heavy_chain.
     _CDR_MUTATION_TOOLS = {"cdr_mutator"}
+    _INPUT_TOOLS = {"loop_start", "sequence_input", "sequence_db"}
+    # Pass 1a: evaluated sequence comes from loop_start / sequence_input
+    for node_id, node_run in run.nodes.items():
+        if node_run.status != "succeeded":
+            continue
+        outs = node_run.outputs or {}
+        tool = snap_tool.get(node_id, "")
+        if tool in _INPUT_TOOLS:
+            if outs.get("heavy_chain") and "vh" not in entry:
+                entry["vh"] = outs["heavy_chain"]
+            if outs.get("light_chain") and "vl" not in entry:
+                entry["vl"] = outs["light_chain"]
+    # Pass 1b: also record loop_end's next_heavy_chain for bookkeeping (not used as vh key)
     for node_id, node_run in run.nodes.items():
         if node_run.status != "succeeded":
             continue
         outs = node_run.outputs or {}
         result = outs.get("result")
         if isinstance(result, dict):
-            if result.get("next_heavy_chain") and "vh" not in entry:
-                entry["vh"] = result["next_heavy_chain"]
-            if result.get("next_light_chain") and "vl" not in entry:
-                entry["vl"] = result["next_light_chain"]
-        # Direct next_heavy_chain output (some loop_end variants)
-        if outs.get("next_heavy_chain") and "vh" not in entry:
-            entry["vh"] = outs["next_heavy_chain"]
-        if outs.get("next_light_chain") and "vl" not in entry:
-            entry["vl"] = outs["next_light_chain"]
+            if result.get("next_heavy_chain") and "next_vh" not in entry:
+                entry["next_vh"] = result["next_heavy_chain"]
+        if outs.get("next_heavy_chain") and "next_vh" not in entry:
+            entry["next_vh"] = outs["next_heavy_chain"]
 
-    # Fall back: use loop_start / sequence_input if no evaluated sequence was found
+    # Pass 2: fallback if no input node found — any non-cdr_mutator node with heavy_chain
     for node_id, node_run in run.nodes.items():
         if node_run.status != "succeeded":
             continue

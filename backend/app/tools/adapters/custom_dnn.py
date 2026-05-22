@@ -168,15 +168,26 @@ def _normalize_embedding_input(
     raw: Any,
     sequences_raw: str = "",
 ) -> "dict[str, list[float]] | None":
-    """Normalize any embedding format coming from upstream tools to {seq_id: [float...]} dict.
+    """Normalize any embedding format from upstream tools to {seq_id: [float...]} dict.
 
-    Embedding tools output either:
-      • {seq_id: [float...]}  — already correct (AbMAP cache, etc.)
-      • [[float...], ...]     — batch list from abmap/esm/cheap
+    Accepts:
+      • {n, results: [{vh, vl, emb_vh, emb_vl}]} — new standard format
+      • {seq_id: [float...]}  — pre-keyed dict
+      • [[float...], ...]     — batch list
       • [float...]            — single-sequence flat list
     """
     if not raw:
         return None
+
+    # New standard embedding format
+    if isinstance(raw, dict) and "results" in raw:
+        out: dict[str, list[float]] = {}
+        for i, entry in enumerate(raw["results"]):
+            emb = entry.get("emb_vh") or entry.get("emb_vl")
+            if emb:
+                seq_id = entry.get("vh") or f"seq_{i}"
+                out[str(seq_id)] = emb
+        return out or None
 
     if isinstance(raw, dict):
         if any(isinstance(v, list) for v in raw.values()):
@@ -185,6 +196,16 @@ def _normalize_embedding_input(
 
     if not isinstance(raw, list) or len(raw) == 0:
         return None
+
+    # List of variant dicts [{vh, vl, emb_vh, emb_vl}] — standard results list
+    if isinstance(raw[0], dict):
+        out2: dict[str, list[float]] = {}
+        for i, entry in enumerate(raw):
+            emb = entry.get("emb_vh") or entry.get("emb_vl")
+            if emb:
+                seq_id = entry.get("vh") or f"seq_{i}"
+                out2[str(seq_id)] = emb
+        return out2 or None
 
     pairs = _parse_fasta_ids(sequences_raw) if sequences_raw else []
 
@@ -209,8 +230,17 @@ class CustomDNNAdapter:
         self.spec = spec
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
-        architecture_spec = inputs.get("architecture_spec")
-        labels = inputs.get("labels")
+        import json as _json
+        def _maybe_parse(v: Any) -> Any:
+            if isinstance(v, str):
+                try:
+                    return _json.loads(v)
+                except Exception:
+                    return v
+            return v
+
+        architecture_spec = _maybe_parse(inputs.get("architecture_spec"))
+        labels = _maybe_parse(inputs.get("labels"))
         model_artifact = await _resolve_model_artifact(inputs.get("model_artifact"))
         sequences_raw: str = str(inputs.get("sequences") or "")
         # Normalize embedding_input(s): upstream tools emit lists; run.py expects {seq_id: [...]}
@@ -256,7 +286,7 @@ class CustomDNNAdapter:
             await run_ctx.alog("Custom DNN")
 
         if inputs.get("committee_mode"):
-            n_ranks = sum(1 for k in ("scores_rank_1","scores_rank_2","scores_rank_3","scores_rank_4") if inputs.get(k))
+            n_ranks = sum(1 for k, v in inputs.items() if k.startswith("scores_rank_") and v)
             await run_ctx.alog(f"Custom DNN · committee mode · M={inputs.get('n_committee',5)} · ranks={n_ranks}")
         else:
             has_labels = bool(labels) and (
@@ -291,10 +321,16 @@ class CustomDNNAdapter:
             # committee / ML-DE
             "committee_mode", "n_committee", "kappa_epi", "kappa_conf",
             "lower_is_better", "top_k", "batch_size",
-            "scores_rank_1", "scores_rank_2", "scores_rank_3", "scores_rank_4",
-            "accumulated_dataset",
+            "accumulated_dataset", "score_key",
         }
         runner_inputs: dict[str, Any] = {k: v for k, v in inputs.items() if k in _PASS_THROUGH}
+        # Use parsed (not raw string) versions for JSON fields
+        if labels is not None:
+            runner_inputs["labels"] = labels
+        # Dynamically forward any scores_rank_* ports
+        for k, v in inputs.items():
+            if k.startswith("scores_rank_") and v:
+                runner_inputs[k] = v
 
         # Forward pre-computed embedding dicts for committee mode
         for port in ("embeddings", "candidate_embeddings"):

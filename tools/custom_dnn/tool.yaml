@@ -190,6 +190,14 @@ inputs:
       by the loop executor — do not wire manually.
       Format: {"embeddings": {seq_id: [float]}, "scores_rank_1": {seq_id: float}, ...}
 
+  - name: score_key
+    type: str
+    required: false
+    default: "scores_rank_1"
+    description: >
+      Which score column to pull from accumulated_dataset for training labels
+      in standard (non-committee) mode. e.g. "scores_rank_1", "scores_rank_2".
+
   - name: n_committee
     type: int
     required: false
@@ -238,6 +246,12 @@ outputs:
   - name: metrics
     type: json
     description: "Training/eval metrics: loss curves, RMSE/AUC per epoch."
+
+  - name: candidate_predictions
+    type: json
+    description: >
+      Predicted scores for candidate sequences — {seq_id: float}.
+      Populated when candidate_embeddings is connected in standard mode.
 
   - name: acquisition_scores
     type: json

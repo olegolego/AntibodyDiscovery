@@ -63,6 +63,8 @@ _SKIP_KEYS: frozenset[str] = frozenset({
     "model_artifact", "weights_b64", "architecture_spec", "committees",
     # Control / debug
     "stdout", "error", "result",
+    # Local filesystem paths — not meaningful outside the machine that ran the tool
+    "artifact_dir", "output_dir", "work_dir", "run_dir", "tmp_dir",
     # Per-residue arrays (handled by computed registry below)
     "plddt", "pae", "error_estimates",
     # Other large complex blobs

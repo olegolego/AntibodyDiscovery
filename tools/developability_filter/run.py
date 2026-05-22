@@ -379,15 +379,75 @@ def _assess_vh(vh: str, cdr_map: dict[str, list[int]]) -> list[dict]:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def _parse_variants(inp: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return a list of variant dicts, each guaranteed to have 'vh' and 'vl'.
+
+    Priority:
+      1. sequences.variants  — standard batch token {n, variants: [{vh, vl, ...}]}
+      2. sequences as a bare list — [{vh, vl, ...}]
+      3. heavy_chain_variants + light_chain_variants — legacy parallel lists
+      4. variant_N bundles — legacy individual handles
+    Extra fields on each variant (scores, embeddings, …) are preserved as-is.
+    """
+    seq_input = inp.get("sequences")
+
+    # Standard batch token
+    if isinstance(seq_input, dict) and "variants" in seq_input:
+        raw = seq_input["variants"]
+    elif isinstance(seq_input, list):
+        raw = seq_input
+    else:
+        raw = None
+
+    if raw:
+        out = []
+        seen: set[str] = set()
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            vh = str(entry.get("vh") or "").strip().upper()
+            vl = str(entry.get("vl") or "").strip().upper()
+            if vh and vh not in seen:
+                seen.add(vh)
+                out.append({**entry, "vh": vh, "vl": vl})
+        return out
+
+    # Legacy parallel lists
+    vh_list = inp.get("heavy_chain_variants") or []
+    vl_list = inp.get("light_chain_variants") or []
+    if isinstance(vh_list, list) and vh_list:
+        out = []
+        seen: set[str] = set()
+        for i, vh in enumerate(vh_list):
+            vh = str(vh).strip().upper()
+            vl = str(vl_list[i]).strip().upper() if i < len(vl_list) else ""
+            if vh and vh not in seen:
+                seen.add(vh)
+                out.append({"vh": vh, "vl": vl})
+        return out
+
+    # Legacy variant_N bundles
+    out = []
+    seen: set[str] = set()
+    for i in range(1, 11):
+        bundle = inp.get(f"variant_{i}") or {}
+        if isinstance(bundle, dict):
+            vh = str(bundle.get("heavy_chain") or "").strip().upper()
+            vl = str(bundle.get("light_chain") or "").strip().upper()
+            if vh and vh not in seen:
+                seen.add(vh)
+                out.append({"vh": vh, "vl": vl})
+    return out
+
+
 def main() -> None:
     inp: dict[str, Any] = json.load(sys.stdin)
 
     scheme: str = str(inp.get("scheme", "imgt")).strip().lower()
     max_ptm = int(inp.get("max_ptm_liabilities", 3))
-    acq_scores: dict[str, float] = inp.get("acquisition_scores") or {}
+    # acquisition_scores map is a fallback; per-variant scores in the batch take priority
+    acq_scores_map: dict[str, float] = inp.get("acquisition_scores") or {}
 
-    # check_config: {check_name: "hard"|"warn"|"off"} — new format.
-    # Falls back to legacy hard_fail_checks + built-in PTM classification.
     _DEFAULT_CONFIG: dict[str, str] = {
         "N-glycosylation": "hard", "Deamidation": "warn", "Isomerization": "warn",
         "Oxidation-Trp": "warn", "Oxidation-Met": "warn", "DP-cleavage": "warn",
@@ -399,7 +459,6 @@ def main() -> None:
     if inp.get("check_config"):
         check_config.update(inp["check_config"])
     elif inp.get("hard_fail_checks"):
-        # Legacy: override hard-fail set from old param
         for k in check_config:
             check_config[k] = "hard" if k in inp["hard_fail_checks"] else check_config[k]
 
@@ -407,36 +466,21 @@ def main() -> None:
     off_checks  = {k for k, v in check_config.items() if v == "off"}
     _PTM_CHECKS = {k for k, v in check_config.items() if v == "warn"}
 
-    # Collect variants — prefer list inputs, fall back to legacy variant_N bundles
-    variants: list[tuple[str, str]] = []   # (vh, vl)
-    vh_list = inp.get("heavy_chain_variants") or []
-    vl_list = inp.get("light_chain_variants") or []
-    if isinstance(vh_list, list) and vh_list:
-        for i, vh in enumerate(vh_list):
-            vh = str(vh).strip().upper()
-            vl = str(vl_list[i]).strip().upper() if i < len(vl_list) else ""
-            if vh and vh not in [v[0] for v in variants]:
-                variants.append((vh, vl))
-    else:
-        # Legacy: individual variant_N bundle inputs
-        for i in range(1, 11):
-            bundle = inp.get(f"variant_{i}") or {}
-            if isinstance(bundle, dict):
-                vh = str(bundle.get("heavy_chain") or "").strip().upper()
-                vl = str(bundle.get("light_chain") or "").strip().upper()
-                if vh and vh not in [v[0] for v in variants]:
-                    variants.append((vh, vl))
-
+    variants = _parse_variants(inp)
     if not variants:
-        print(json.dumps({"error": "No variants provided. Wire cdr_mutator.heavy_chain_variants here."}))
+        print(json.dumps({"error": "No variants provided — wire a sequences output here."}))
         sys.exit(1)
 
     print(f"Assessing {len(variants)} variants…", file=sys.stderr)
 
     liability_report: dict[str, Any] = {}
-    feasible: dict[str, Any] = {}
+    feasible_variants: list[dict[str, Any]] = []
 
-    for vh, vl in variants:
+    for variant in variants:
+        vh = variant["vh"]
+        vl = variant.get("vl", "")
+        acq = float(variant.get("acquisition_score", acq_scores_map.get(vh, -999.0)))
+
         try:
             _, cdr_map = _get_cdr_positions(vh, scheme)
         except Exception as e:
@@ -444,12 +488,10 @@ def main() -> None:
             cdr_map = {}
         liabilities = [h for h in _assess_vh(vh, cdr_map) if h["check"] not in off_checks]
 
-        # Determine pass/fail
         hard_hit = any(h["check"] in hard_fails for h in liabilities)
         ptm_count = sum(1 for h in liabilities if h["check"] in _PTM_CHECKS)
         passed = not hard_hit and ptm_count <= max_ptm
 
-        acq = acq_scores.get(vh, -999.0)
         liability_report[vh] = {
             "passed": passed,
             "n_liabilities": len(liabilities),
@@ -460,12 +502,12 @@ def main() -> None:
         }
 
         if passed:
-            feasible[vh] = {
-                "heavy_chain": vh,
-                "light_chain": vl,
+            # Preserve all extra fields from the incoming variant, annotate with filter results
+            feasible_variants.append({
+                **variant,
                 "acquisition_score": acq,
                 "n_liabilities": len(liabilities),
-            }
+            })
 
         status = "PASS" if passed else "FAIL"
         fail_reason = ""
@@ -476,25 +518,35 @@ def main() -> None:
         print(f"  {vh[:25]}… {status}{fail_reason} | {len(liabilities)} liabilities | acq={acq:.3f}", file=sys.stderr)
 
     # Fallback: if all variants fail, keep the best-scoring one
-    if not feasible and variants:
-        best_vh, best_vl = max(variants, key=lambda t: acq_scores.get(t[0], -999.0))
-        feasible[best_vh] = {
-            "heavy_chain": best_vh,
-            "light_chain": best_vl,
-            "acquisition_score": acq_scores.get(best_vh, -999.0),
+    if not feasible_variants and variants:
+        best = max(variants, key=lambda v: float(v.get("acquisition_score", acq_scores_map.get(v["vh"], -999.0))))
+        best_vh = best["vh"]
+        feasible_variants.append({
+            **best,
+            "acquisition_score": float(best.get("acquisition_score", acq_scores_map.get(best_vh, -999.0))),
             "n_liabilities": len(liability_report.get(best_vh, {}).get("liabilities", [])),
-        }
+        })
         print(f"  All variants failed — falling back to best-scoring: {best_vh[:25]}…", file=sys.stderr)
 
-    print(f"Done: {len(feasible)}/{len(variants)} variants feasible.", file=sys.stderr)
+    print(f"Done: {len(feasible_variants)}/{len(variants)} variants feasible.", file=sys.stderr)
+
+    # Output sequences in the same batch format as input
+    sequences_out = {"n": len(feasible_variants), "variants": feasible_variants}
+
+    # Legacy feasible_variants dict keyed by vh (for backward-compat wiring)
+    feasible_dict = {v["vh"]: {"heavy_chain": v["vh"], "light_chain": v.get("vl", ""),
+                                "acquisition_score": v.get("acquisition_score", -999.0),
+                                "n_liabilities": v.get("n_liabilities", 0)}
+                     for v in feasible_variants}
 
     result = {
-        "feasible_variants": feasible,
-        "n_feasible": len(feasible),
+        "feasible_variants": feasible_dict,
+        "n_feasible": len(feasible_variants),
         "liability_report": liability_report,
     }
 
     print(json.dumps({
+        "sequences": sequences_out,
         **result,
         "result": result,
     }))

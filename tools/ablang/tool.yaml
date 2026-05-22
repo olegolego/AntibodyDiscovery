@@ -1,60 +1,60 @@
 id: ablang
 name: AbLang Embedding
-version: "1.0.0"
+version: "2.0.0"
 category: sequence_embedding
 description: >
-  Antibody language model (AbLang) trained on the Observed Antibody Space. Produces
-  sequence-level embeddings (768-dim), residue-level embeddings, per-position amino
-  acid likelihoods, or restores missing residues marked with '*'. Runs on CPU; no
-  GPU required.
+  Antibody language model (AbLang) trained on the Observed Antibody Space.
+  Embeds VH and VL chains independently (768-dim each) and returns both in a
+  single standardised batch result. Runs on CPU; no GPU required.
 
 inputs:
-  - name: sequence
+  - name: vh
     type: fasta
-    required: true
+    required: false
     default: "EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAKDRLSITIRPRYYGLDVWGQGTLVTVSS"
     description: >
-      Antibody heavy- or light-chain amino acid sequence (single-letter, no FASTA header).
-      Use '*' for unknown/missing positions (e.g. from BCR sequencing with incomplete N-terminus).
+      Single VH sequence (raw AA or FASTA). Use 'sequences' for batch input.
+      Accepts '*' for unknown positions.
 
-  - name: chain_type
-    type: str
+  - name: vl
+    type: fasta
     required: false
-    default: H
-    description: "Chain type: H for heavy, L for light."
+    default: ""
+    description: >
+      Single VL sequence paired with 'vh'. Leave empty to embed VH only.
+
+  - name: sequences
+    type: json
+    required: false
+    description: >
+      Batch input: a list of {vh, vl} dicts, e.g.
+      [{"vh": "EVQL...", "vl": "DIQM..."}, ...].
+      Overrides 'vh'/'vl' when provided.
 
   - name: mode
     type: str
     required: false
     default: seqcoding
     description: >
-      Output mode. 'seqcoding' returns a single 768-dim vector per sequence (fixed length,
-      suitable for downstream ML). 'rescoding' returns a 768-dim vector per residue.
-      'likelihood' returns per-position amino acid log-probabilities (useful for mutation
-      scoring). 'restore' fills in '*' positions with the most probable amino acid.
+      'seqcoding' returns a single 768-dim vector per chain (suitable for
+      downstream ML). 'rescoding' returns a 768-dim vector per residue.
 
 outputs:
-  - name: embedding
-    type: json
-    description: "768-dim sequence embedding (seqcoding mode only)."
+  - name: n
+    type: int
+    description: Number of VH/VL pairs in the batch.
 
-  - name: res_embeddings
+  - name: results
     type: json
-    description: "Per-residue 768-dim embeddings as a list of lists (rescoding mode only)."
-
-  - name: likelihoods
-    type: json
-    description: "Per-position amino acid log-probabilities, list of {aa: logprob} dicts (likelihood mode only)."
-
-  - name: restored_sequence
-    type: fasta
-    description: "Sequence with '*' positions filled in (restore mode only)."
+    description: >
+      List of n dicts: {vh, vl, emb_vh, emb_vl}.
+      emb_vl is null when no VL was provided.
 
   - name: metadata
     type: json
-    description: "Chain type, mode, sequence length, and embedding shape."
+    description: Model name, mode, and embedding dim.
 
 runtime:
   kind: local_python
   gpu: false
-  timeout_seconds: 120
+  timeout_seconds: 300

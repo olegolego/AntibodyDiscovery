@@ -432,13 +432,24 @@ def main() -> None:
     _progress(f"Done — {n_h} VH variants, {n_l} VL variants")
 
     # ── Build output dict ──────────────────────────────────────────────────────
+    n_out = max(n_h, n_l)
+    sequences_variants = [
+        {
+            "vh": heavy_variants[i] if i < n_h else heavy,
+            "vl": light_variants[i] if i < n_l else (light or None),
+        }
+        for i in range(n_out)
+    ]
     result: dict = {
+        "n": n_out,
         # Convenience single-sequence outputs (alias of variant_1)
         "heavy_chain": heavy_variants[0] if heavy_variants else (heavy or ""),
         "light_chain": light_variants[0] if light_variants else (light or ""),
         # Full libraries
         "heavy_chain_variants": heavy_variants,
         "light_chain_variants": light_variants,
+        # Standard batch token — wire to any batch-aware downstream node
+        "sequences": {"n": len(sequences_variants), "variants": sequences_variants},
         "mutation_report": {"heavy": heavy_report, "light": light_report},
         "summary": summary,
     }
@@ -448,7 +459,6 @@ def main() -> None:
     # downstream tool (ImmuneBuilder, AbMAP, BioPhi, etc.).
     # Unused slots are padded with None so the tool spec's declared outputs stay valid.
     _MAX_HANDLE_VARIANTS = 10
-    n_out = max(n_h, n_l)
     for i in range(1, _MAX_HANDLE_VARIANTS + 1):
         idx = i - 1
         h = heavy_variants[idx] if idx < len(heavy_variants) else None

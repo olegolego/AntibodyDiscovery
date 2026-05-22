@@ -23,23 +23,34 @@ class DevelopabilityFilterAdapter:
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
         payload: dict[str, Any] = {}
 
-        # List-format inputs from cdr_mutator (preferred)
-        vh_list = inputs.get("heavy_chain_variants")
-        vl_list = inputs.get("light_chain_variants")
-        if vh_list is not None:
-            payload["heavy_chain_variants"] = vh_list
-        if vl_list is not None:
-            payload["light_chain_variants"] = vl_list
+        # Standard batch token (preferred — wire sequences from any upstream node)
+        sequences = inputs.get("sequences")
+        if sequences is not None:
+            payload["sequences"] = sequences
+            seq_input = sequences
+            if isinstance(seq_input, dict):
+                n_variants = seq_input.get("n") or len(seq_input.get("variants", []))
+            elif isinstance(seq_input, list):
+                n_variants = len(seq_input)
+            else:
+                n_variants = 0
+        else:
+            # Legacy parallel list inputs
+            vh_list = inputs.get("heavy_chain_variants")
+            vl_list = inputs.get("light_chain_variants")
+            if vh_list is not None:
+                payload["heavy_chain_variants"] = vh_list
+            if vl_list is not None:
+                payload["light_chain_variants"] = vl_list
+            n_variants = len(vh_list) if isinstance(vh_list, list) else 0
 
-        n_variants = len(vh_list) if isinstance(vh_list, list) else 0
-
-        # Legacy bundle-format inputs (variant_1 … variant_8)
-        if not n_variants:
-            for i in range(1, 9):
-                v = inputs.get(f"variant_{i}")
-                if v:
-                    payload[f"variant_{i}"] = v
-                    n_variants += 1
+            # Legacy bundle-format inputs (variant_1 … variant_8)
+            if not n_variants:
+                for i in range(1, 9):
+                    v = inputs.get(f"variant_{i}")
+                    if v:
+                        payload[f"variant_{i}"] = v
+                        n_variants += 1
 
         acq = inputs.get("acquisition_scores")
         if acq:

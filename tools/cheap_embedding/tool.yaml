@@ -1,23 +1,31 @@
 id: cheap_embedding
 name: CHEAP Embedding
-version: "1.0.0"
+version: "2.0.0"
 category: sequence_embedding
 description: >
   CHEAP (Compressed Hourglass Embedding Adaptation of Proteins) — compressed
-  representations of ESMFold latents. Produces embeddings 2–256× smaller than
-  raw ESMFold representations while preserving structural information. Trained
-  on CATH domains; 18 checkpoints cover all combinations of shorten_factor
-  (1 or 2) × channel_dim (4–1024). Requires ~4 GB RAM to load ESMFold on CPU.
-  Start the server first: bash tools/cheap_embedding/start.sh
+  ESMFold latents. Embeds VH and VL chains independently and returns both in a
+  single standardised batch result. Requires ~8 GB RAM for ESMFold backbone.
 
 inputs:
-  - name: sequence
+  - name: vh
     type: fasta
-    required: true
+    required: false
     default: "EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAK"
     description: >
-      Protein or antibody amino acid sequence (single-letter, FASTA or raw).
-
+      Single VH sequence (raw AA or FASTA). Use 'sequences' for batch input.
+  - name: vl
+    type: fasta
+    required: false
+    default: ""
+    description: >
+      Single VL sequence paired with 'vh'. Leave empty to embed VH only.
+  - name: sequences
+    type: json
+    required: false
+    description: >
+      Batch input: a list of {vh, vl} dicts.
+      Overrides 'vh'/'vl' when provided.
   - name: shorten_factor
     type: int
     required: false
@@ -25,10 +33,7 @@ inputs:
     options:
       - "1"
       - "2"
-    description: >
-      Sequence length compression. 1 = same length as input; 2 = length halved
-      (adjacent positions merged by the hourglass encoder).
-
+    description: Sequence length compression. 1 = same length; 2 = halved.
   - name: dim
     type: int
     required: false
@@ -43,23 +48,25 @@ inputs:
       - "256"
       - "512"
       - "1024"
-    description: >
-      Embedding dimension per position after compression.
-      64 is a good default: 16× smaller than ESMFold (1024-dim) while retaining
-      most structural information. Use 1024 for lossless ESMFold passthrough.
+    description: Embedding dimension per position after compression.
 
 outputs:
-  - name: embedding
+  - name: n
+    type: int
+    description: Number of VH/VL pairs in the batch.
+  - name: results
     type: json
-    description: Mean-pooled embedding vector (dim-dimensional float array).
-
-  - name: residue_embeddings
+    description: >
+      List of n dicts: {vh, vl, emb_vh, emb_vl}.
+      emb_vl is null when no VL was provided.
+  - name: sequences
     type: json
-    description: Per-(compressed-)position embeddings as list of lists.
-
+    description: >
+      Standard batch token: {n, variants: results} — wire directly to
+      developability_filter, custom_dnn, or any batch-aware downstream node.
   - name: metadata
     type: json
-    description: shorten_factor, dim, sequence_length, compressed_length, output_shape.
+    description: shorten_factor and dim.
 
 runtime:
   kind: http

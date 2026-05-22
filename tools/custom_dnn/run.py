@@ -673,6 +673,32 @@ def main() -> None:
         X = embed_sequences(seq_strs, embedding_model)  # [N, dim]
         print(f"Embedding shape: {list(X.shape)}", file=sys.stderr, flush=True)
 
+    # Coerce HADDOCK single-score format {"score": float} → {seq_ids[0]: float}
+    _SCALAR_SCORE_KEYS = {"score", "haddock_score", "iscor", "total_energy"}
+    if (isinstance(labels_raw, dict) and len(labels_raw) == 1
+            and set(labels_raw.keys()) <= _SCALAR_SCORE_KEYS and seq_ids):
+        labels_raw = {seq_ids[0]: float(next(iter(labels_raw.values())))}
+
+    # Merge accumulated_dataset for multi-iteration training
+    accumulated = inputs.get("accumulated_dataset") or {}
+    score_key: str = str(inputs.get("score_key") or "scores_rank_1")
+    if accumulated:
+        acc_embs: dict = accumulated.get("embeddings") or {}
+        acc_scores: dict = accumulated.get(score_key) or {}
+        extra_ids = [sid for sid in acc_embs if sid not in set(seq_ids)]
+        if extra_ids:
+            extra_vecs = [acc_embs[sid] for sid in extra_ids]
+            X = torch.cat([X, torch.tensor(extra_vecs, dtype=torch.float32)], dim=0)
+            # Extend labels with accumulated scores (only when training)
+            if acc_scores:
+                if not isinstance(labels_raw, dict):
+                    labels_raw = {}
+                for sid in extra_ids:
+                    if sid in acc_scores and sid not in labels_raw:
+                        labels_raw[sid] = float(acc_scores[sid])
+            seq_ids = seq_ids + extra_ids
+            print(f"Merged {len(extra_ids)} accumulated sequences → total {len(seq_ids)}", file=sys.stderr, flush=True)
+
     n = len(seq_ids)
     has_labels = bool(labels_raw) and (
         (isinstance(labels_raw, dict) and len(labels_raw) > 0)
@@ -746,11 +772,33 @@ def main() -> None:
     if history:
         final_metrics = {**history[-1], "history": history}
 
-    json.dump({
+    # ── Score candidate embeddings if provided ────────────────────────────────
+    candidate_predictions: dict = {}
+    cand_emb_raw = inputs.get("candidate_embeddings")
+    if cand_emb_raw and isinstance(cand_emb_raw, dict) and cand_emb_raw:
+        cand_ids = list(cand_emb_raw.keys())
+        X_cand = torch.tensor([cand_emb_raw[sid] for sid in cand_ids], dtype=torch.float32)
+        model.eval()
+        with torch.no_grad():
+            raw_cand = model(X_cand)
+        if task == "regression":
+            candidate_predictions = {sid: round(float(v), 6) for sid, v in zip(cand_ids, raw_cand.squeeze(-1).tolist())}
+        elif task == "binary_classification":
+            candidate_predictions = {sid: round(float(v), 6) for sid, v in zip(cand_ids, raw_cand.squeeze(-1).sigmoid().tolist())}
+        else:
+            probs = raw_cand.softmax(dim=-1).tolist()
+            candidate_predictions = {sid: round(float(max(ps)), 6) for sid, ps in zip(cand_ids, probs)}
+        print(f"Scored {len(candidate_predictions)} candidates.", file=sys.stderr, flush=True)
+
+    out: dict = {
         "model_artifact": artifact_out,
         "predictions":    predictions,
         "metrics":        final_metrics,
-    }, sys.stdout)
+    }
+    if candidate_predictions:
+        out["candidate_predictions"] = candidate_predictions
+
+    json.dump(out, sys.stdout)
 
 
 if __name__ == "__main__":

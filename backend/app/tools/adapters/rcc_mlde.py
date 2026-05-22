@@ -49,22 +49,34 @@ def _coerce_scores(raw: Any) -> dict[str, float] | None:
 
 
 def _coerce_embeddings(raw: Any) -> dict[str, list[float]] | None:
-    """Accept {seq_id: [float]}, [[float]] batch, [float] single, or AbMAP/ESM output.
+    """Accept any embedding format and return {seq_id: [float]}.
 
     Handles:
-    - dict {seq_id: [float]} — standard format
-    - list of floats [float, ...] — single vector from AbMAP → {"seq_0": vec}
-    - list of lists [[float,...], ...] — batch → {"seq_0": vec0, "seq_1": vec1, ...}
-    - dict with numeric values (ESM single embedding) → {"seq_0": vec}
+    - Standard format {n, results: [{vh, vl, emb_vh, emb_vl}]} — new standard
+    - dict {seq_id: [float]} — pre-keyed dict
+    - list of floats [float, ...] — single vector → {"seq_0": vec}
+    - list of lists [[float,...], ...] — batch → {"seq_i": vec}
     """
     if not raw:
         return None
+
+    # New standard embedding format
+    if isinstance(raw, dict) and "results" in raw:
+        out: dict[str, list[float]] = {}
+        for i, entry in enumerate(raw["results"]):
+            emb = entry.get("emb_vh") or entry.get("emb_vl")
+            if emb:
+                seq_id = entry.get("vh") or f"seq_{i}"
+                out[str(seq_id)] = emb
+        return out or None
+
     if isinstance(raw, dict):
         result: dict[str, list[float]] = {}
         for k, v in raw.items():
             if isinstance(v, list) and v and isinstance(v[0], (int, float)):
                 result[str(k)] = v
         return result or None
+
     if isinstance(raw, list) and raw:
         if isinstance(raw[0], (int, float)):
             return {"seq_0": raw}

@@ -83,6 +83,153 @@ runtime:
 
 ---
 
+## 3.5 Standard batch token — sequences I/O convention
+
+Any tool that processes **a collection of antibody variants** must use the standard batch token as its primary `sequences` input and/or output:
+
+```json
+{
+  "n": 3,
+  "variants": [
+    {"vh": "EVQL...", "vl": "DIQM...", "acquisition_score": 0.82, ...extra},
+    {"vh": "EVQL...", "vl": "DIQM..."},
+    {"vh": "EVQL...", "vl": "DIQM..."}
+  ]
+}
+```
+
+**Rules:**
+- The token is a single `sequences` field of type `json`.
+- Each variant **must** have `vh`. `vl` is optional (VHH / nanobody compatible).
+- Extra per-variant fields (acquisition scores, embeddings, etc.) are carried along transparently — downstream nodes must not drop them.
+- Filter nodes output the same format, only keeping passing variants. Augmentation nodes add new fields to each variant dict.
+- The `n` count must equal `len(variants)`.
+
+**In `tool.yaml` — generator (output):**
+```yaml
+outputs:
+  - name: sequences
+    type: json
+    description: >
+      Standard batch token: {n, variants: [{vh, vl}, ...]} — wire to any
+      batch-aware downstream node.
+```
+
+**In `tool.yaml` — processor (input + output):**
+```yaml
+inputs:
+  - name: sequences
+    type: json
+    required: false
+    description: >
+      Standard batch token: {n, variants: [{vh, vl, ...extra}, ...]} or a bare
+      list. Extra per-variant fields are preserved on output.
+
+outputs:
+  - name: sequences
+    type: json
+    description: >
+      Filtered/augmented batch: same shape as input, extra fields preserved.
+```
+
+**In `run.py` — reading the token:**
+```python
+def _parse_variants(inp: dict) -> list[dict]:
+    seq_input = inp.get("sequences")
+    if isinstance(seq_input, dict) and "variants" in seq_input:
+        raw = seq_input["variants"]
+    elif isinstance(seq_input, list):
+        raw = seq_input
+    else:
+        raw = []
+    return [
+        {**entry, "vh": str(entry.get("vh", "")).strip().upper(),
+                  "vl": str(entry.get("vl", "")).strip().upper()}
+        for entry in raw if isinstance(entry, dict) and entry.get("vh")
+    ]
+```
+
+**In `run.py` — emitting the token:**
+```python
+passing = [v for v in variants if <passes_check(v)>]
+print(json.dumps({"sequences": {"n": len(passing), "variants": passing}, ...}))
+```
+
+**Why this matters:** nodes are automata states — the batch token is the message that flows between them. A `cdr_mutator → developability_filter → ablang → custom_dnn` chain all speak the same language with zero per-edge wiring logic.
+
+---
+
+## 3.6 Embedding tools — standard I/O contract
+
+All `category: sequence_embedding` tools (AbLang, ESM2, AbMAP, CHEAP) share a single, locked I/O contract. **Do not invent a new format — use this one.**
+
+### Inputs
+
+Every embedding tool accepts the same three input fields:
+
+| Field | Type | Role |
+|---|---|---|
+| `vh` | `fasta` | Single VH sequence (shorthand for one pair) |
+| `vl` | `fasta` | Single VL sequence, paired with `vh`; empty = VH-only |
+| `sequences` | `json` | Batch: `[{"vh": "...", "vl": "..."|null}, ...]`. Overrides `vh`/`vl` when present. |
+
+Plus tool-specific model params (`mode`, `model_size`, `task`, etc.).
+
+### Output
+
+```json
+{
+  "n": 2,
+  "results": [
+    {"vh": "EVQLVE...", "vl": "DIQMTQ...", "emb_vh": [0.1, ...], "emb_vl": [0.3, ...]},
+    {"vh": "QVQLVE...", "vl": null,        "emb_vh": [0.5, ...], "emb_vl": null}
+  ],
+  "metadata": {"model": "ablang", "mode": "seqcoding", "dim": 768}
+}
+```
+
+- `n` — number of pairs in the batch (equals `len(results)`)
+- Each result carries the original sequences (`vh`, `vl`) plus their embeddings (`emb_vh`, `emb_vl`)
+- `emb_vl` is `null` when no VL was provided
+- `metadata` carries model-specific info (dim, mode, pool_mode, etc.)
+
+### Why this shape
+
+Each tool is an automaton **state**. The embedding output is the **token** that flows between states. A downstream node reads `n` first to know batch size, then indexes into `results[i]` to get the embeddings it needs. No per-edge normalization logic required.
+
+### Adapter: use `parse_sequences`
+
+All embedding adapters call `parse_sequences(inputs)` from `app.tools.embedding_utils` to normalise any upstream canvas format into the `[{"vh", "vl"}]` list:
+
+```python
+from app.tools.embedding_utils import parse_sequences
+
+sequences = parse_sequences(inputs)   # always returns [{"vh": str, "vl": str|None}, ...]
+outputs = await run_tool_subprocess("ablang", {"sequences": sequences, "mode": mode}, ...)
+```
+
+`parse_sequences` handles: `sequences` list, `vh`/`vl` fields, `heavy_chain`/`light_chain` fields, `sequence` (legacy single field), `candidate_sequences` list, and multi-FASTA strings.
+
+### Downstream: embedding output → ML tool input
+
+When a downstream ML tool (rcc_mlde, custom_dnn) receives embedding output, `_coerce_embeddings` / `_normalize_embedding_input` already handle the standard format:
+
+```python
+# They return {seq_id: [float...]} — keyed by vh sequence string
+coerced = _coerce_embeddings(embedding_output)   # {"EVQLVE...": [0.1, ...], ...}
+```
+
+`results_to_seq_emb_dict(embedding_output, chain="vh")` in `embedding_utils.py` does the same thing explicitly.
+
+### Adding a new embedding tool
+
+1. Implement `run.py` / `server.py` to accept `sequences: [{vh, vl}]` and return `{n, results, metadata}`.
+2. Use the shared input/output sections in `tool.yaml` — copy from `tools/ablang/tool.yaml` (inputs: `vh`, `vl`, `sequences`; outputs: `n`, `results`, `metadata`).
+3. Write the adapter using `parse_sequences`.
+4. Run `tools/test_embedding_format.py <your_tool>` to validate.
+
+---
+
 ## 4. Environment setup
 
 ### Pattern A — backend venv (in-process)

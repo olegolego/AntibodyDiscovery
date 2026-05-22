@@ -8,24 +8,34 @@ description: >
   liability checks, then ranks passing variants by acquisition score.
 
 inputs:
-  # ── Variant lists from cdr_mutator (one edge each) ────────────────────────
+  # ── Standard batch input ──────────────────────────────────────────────────
+  - name: sequences
+    type: json
+    required: false
+    description: >
+      Standard batch token: {n, variants: [{vh, vl, ...extra}, ...]} or a bare
+      list [{vh, vl, ...}]. Any extra fields on each variant (scores, embeddings,
+      …) are preserved on passing variants in the output. This is the preferred
+      input — wire from any tool that emits a sequences output.
+
+  # ── Legacy inputs (kept for backward-compat) ─────────────────────────────
   - name: heavy_chain_variants
     type: json
     required: false
-    description: "List of VH sequences from cdr_mutator.heavy_chain_variants."
+    description: "Legacy: list of VH sequences. Prefer wiring sequences instead."
   - name: light_chain_variants
     type: json
     required: false
-    description: "List of VL sequences from cdr_mutator.light_chain_variants. Optional for VHH."
+    description: "Legacy: list of VL sequences. Prefer wiring sequences instead."
 
-  # ── Acquisition scores (from rcc_mlde or dnn_mlde) ───────────────────────
+  # ── Acquisition scores (fallback when not embedded per-variant) ───────────
   - name: acquisition_scores
     type: json
     required: false
     default: null
     description: >
-      {vh_sequence: float} acquisition scores from rcc_score or dnn_score node.
-      Used to rank feasible variants. Variants without a score are ranked last.
+      {vh_sequence: float} acquisition scores. Only used for variants that don't
+      already carry an acquisition_score field.
 
   # ── CDR numbering scheme ─────────────────────────────────────────────────
   - name: scheme
@@ -68,28 +78,36 @@ inputs:
       Maximum allowed PTM / warn-severity liabilities before a variant is rejected.
 
 outputs:
-  - name: feasible_variants
+  - name: sequences
     type: json
     description: >
-      {vh_seq: {heavy_chain, light_chain, acquisition_score, n_liabilities}} for
-      all variants that passed. Sorted by acquisition_score descending.
+      Filtered batch token: {n, variants: [{vh, vl, ...extra}, ...]} containing
+      only the variants that passed all checks. Same shape as input sequences —
+      wire directly to any downstream batch-aware node. Extra fields from the
+      input variants are preserved.
 
   - name: n_feasible
     type: int
     description: Number of variants that passed all checks.
+
+  - name: feasible_variants
+    type: json
+    description: >
+      Legacy keyed dict: {vh_seq: {heavy_chain, light_chain, acquisition_score,
+      n_liabilities}} for passing variants.
 
   - name: liability_report
     type: json
     description: >
       Per-variant full report: {vh_seq: {passed, n_liabilities, liabilities: [
         {check, severity, sequence, position, description, citation}
-      ]}}. Useful for debugging and logging in loop_history.
+      ]}}.
 
   - name: result
     type: json
     description: >
-      Combined output for loop_end wiring — contains feasible_variants,
-      n_feasible, and liability_report in one dict.
+      Combined output for loop_end wiring — feasible_variants, n_feasible, and
+      liability_report in one dict.
 
 runtime:
   kind: local_python

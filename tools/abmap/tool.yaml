@@ -1,56 +1,63 @@
 id: abmap
 name: AbMAP Embedding
-version: "0.1.0"
+version: "2.0.0"
 category: sequence_embedding
 description: >
-  Antibody sequence embedding with AbMAP, using CDR-focused mutagenesis augmentation
-  and the upstream Bepler/Berger-backed AbMAP checkpoint. Accepts a single sequence
-  string or a list of sequences — automatically routes to single or batch embedding.
+  AbMAP antibody embedding with CDR-focused mutagenesis augmentation.
+  Embeds VH and VL chains independently and returns both in a single
+  standardised batch result. Requires ANARCI for CDR identification.
 
 inputs:
-  - name: sequence
+  - name: vh
     type: fasta
     required: false
     description: >
-      A single VH/VL sequence string (single-letter FASTA or raw AA) OR a list of
-      sequence strings for batch embedding. String → returns embedding. List → returns
-      candidate_embeddings dict keyed by sequence string.
-  - name: chain_type
-    type: str
+      Single VH sequence (raw AA or FASTA). Use 'sequences' for batch input.
+  - name: vl
+    type: fasta
     required: false
-    default: H
-    description: Antibody chain type. Use H for heavy chains and L for light chains.
+    default: ""
+    description: >
+      Single VL sequence paired with 'vh'. Leave empty to embed VH only.
+  - name: sequences
+    type: json
+    required: false
+    description: >
+      Batch input: a list of {vh, vl} dicts.
+      Overrides 'vh'/'vl' when provided.
   - name: task
     type: str
     required: false
     default: structure
-    description: Embedding head to use. Supported values are structure and function.
+    description: Embedding head. 'structure' or 'function'.
   - name: embedding_type
     type: str
     required: false
     default: fixed
-    description: Output mode. Supported values are fixed and variable.
+    description: Output mode. 'fixed' or 'variable'.
   - name: num_mutations
     type: int
     required: false
     default: 10
-    description: Number of in-silico mutations used for AbMAP augmentation. Higher values improve fidelity but increase runtime.
+    description: In-silico mutations for AbMAP augmentation.
 
 outputs:
-  - name: embedding
-    type: json
-    description: AbMAP embedding as a JSON array (single-sequence mode).
-  - name: embeddings
-    type: json
-    description: List of embedding arrays (batch/multi-FASTA mode).
-  - name: candidate_embeddings
+  - name: n
+    type: int
+    description: Number of VH/VL pairs in the batch.
+  - name: results
     type: json
     description: >
-      {sequence_string → [float]} dict, populated when a list is passed as sequence.
-      Wire directly to rcc_mlde or dnn_mlde candidate_embeddings.
+      List of n dicts: {vh, vl, emb_vh, emb_vl}.
+      emb_vl is null when no VL was provided.
+  - name: sequences
+    type: json
+    description: >
+      Standard batch token: {n, variants: results} — wire directly to
+      developability_filter, custom_dnn, or any batch-aware downstream node.
   - name: metadata
     type: json
-    description: Embedding metadata including task, shape, CDR length, and sequence length.
+    description: task, embedding_type, num_mutations.
 
 runtime:
   kind: http

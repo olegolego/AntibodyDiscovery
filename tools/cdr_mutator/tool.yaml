@@ -112,6 +112,10 @@ inputs:
     description: "Random seed for reproducibility (ignored for saturation strategy)."
 
 outputs:
+  - name: n
+    type: int
+    description: "Total number of variants generated."
+
   # ── Per-variant bundle outputs (wire directly to ImmuneBuilder, AbMAP, etc.) ──
   - name: variant_1
     type: json
@@ -153,6 +157,11 @@ outputs:
     description: "First light chain variant (alias of variant_1 light_chain)."
 
   # ── Full library outputs ────────────────────────────────────────────────────
+  - name: sequences
+    type: json
+    description: >
+      Standard batch token: {n, variants: [{vh, vl}, ...]} — wire to any
+      batch-aware downstream node (developability_filter, ablang, immunebuilder, etc.).
   - name: heavy_chain_variants
     type: json
     description: "All generated heavy chain variant sequences (list of strings)."

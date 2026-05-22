@@ -1,20 +1,33 @@
 id: esm_embedding
 name: ESM2 Embedding
-version: "1.0.0"
+version: "2.0.0"
 category: sequence_embedding
 description: >
-  Meta's ESM2 protein language model — produces high-quality embeddings from
-  amino acid sequences. Trained on 250 M UniRef50 sequences; four sizes available
-  (8 M → 650 M parameters). Outputs a fixed-length sequence vector (mean/CLS pool)
-  or full per-residue embeddings. No GPU required; runs on CPU.
+  Meta's ESM2 protein language model. Embeds VH and VL chains independently
+  and returns both in a single standardised batch result.
+  Four model sizes (8M-650M). No GPU required.
 
 inputs:
-  - name: sequence
+  - name: vh
     type: fasta
-    required: true
+    required: false
     default: "EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAK"
     description: >
-      Antibody heavy- or light-chain amino acid sequence (single-letter, FASTA or raw).
+      Single VH sequence (raw AA or FASTA). Use 'sequences' for batch input.
+
+  - name: vl
+    type: fasta
+    required: false
+    default: ""
+    description: >
+      Single VL sequence paired with 'vh'. Leave empty to embed VH only.
+
+  - name: sequences
+    type: json
+    required: false
+    description: >
+      Batch input: a list of {vh, vl} dicts.
+      Overrides 'vh'/'vl' when provided.
 
   - name: model_size
     type: str
@@ -26,8 +39,7 @@ inputs:
       - "150M"
       - "650M"
     description: >
-      ESM2 model size. 650M (1280-dim) gives the best embeddings; 8M is ~40× faster.
-      Weights are downloaded automatically on first use (~700 MB for 650M).
+      ESM2 model size. 650M (1280-dim) gives the best embeddings; 8M is ~40x faster.
 
   - name: pool_mode
     type: str
@@ -38,23 +50,25 @@ inputs:
       - "cls"
       - "per_residue"
     description: >
-      Pooling strategy. 'mean' averages all residue embeddings into one vector.
+      Pooling strategy. 'mean' averages all residue embeddings.
       'cls' uses the [CLS] token. 'per_residue' returns all residue embeddings.
 
 outputs:
-  - name: embedding
-    type: json
-    description: Sequence-level embedding vector (mean or cls pool).
+  - name: n
+    type: int
+    description: Number of VH/VL pairs in the batch.
 
-  - name: res_embeddings
+  - name: results
     type: json
-    description: Per-residue embeddings as a list of lists (per_residue mode only).
+    description: >
+      List of n dicts: {vh, vl, emb_vh, emb_vl}.
+      emb_vl is null when no VL was provided.
 
   - name: metadata
     type: json
-    description: Model name, sequence length, embedding dim, output shape.
+    description: Model name, model_size, pool_mode, and embedding dim.
 
 runtime:
   kind: local_python
   gpu: false
-  timeout_seconds: 300
+  timeout_seconds: 600
