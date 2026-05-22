@@ -50,14 +50,28 @@ _LOOP_START_TOOLS = {"loop_start"}         # mark the loop entry point
 # due to bad input geometry while others succeed.
 _FAULT_TOLERANT_TOOLS = {"haddock3"}
 
+# Per-loop asyncio locks prevent concurrent _maybe_continue_loop calls from
+# spawning duplicate iterations when two run-completion callbacks race.
+import asyncio as _asyncio
+_loop_continuation_locks: dict[str, "_asyncio.Lock"] = {}
+
+_LARGE_ARTIFACT_KEYS = {"model_artifact", "committees", "architecture_spec"}
+
 def _strip_for_generic_analysis(outputs: dict[str, Any]) -> dict[str, Any]:
-    """Strip large PDB strings and float embedding arrays before saving generic analysis."""
+    """Strip PDB strings, embedding arrays, and large model artifacts before storing analysis."""
     result = {}
     for k, v in outputs.items():
+        if k in _LARGE_ARTIFACT_KEYS:
+            result[k] = f"__artifact_{k}__"
+            continue
         if isinstance(v, str) and len(v) > 10_000:
             continue  # large PDB / FASTA blob
         if isinstance(v, list) and len(v) > 100 and v and isinstance(v[0], (int, float)):
             continue  # embedding vector
+        # Recursively estimate size of nested dicts — drop if > 500KB serialized
+        if isinstance(v, dict) and len(str(v)) > 500_000:
+            result[k] = f"__large_dict_{len(str(v))//1000}k__"
+            continue
         result[k] = v
     return result
 _cancelled_runs: set[str] = set()
@@ -83,7 +97,7 @@ async def _save_analysis(run_id: str, node_id: str, tool_id: str, outputs: dict[
             run_id=run_id,
             node_id=node_id,
             tool_id=tool_id,
-            data=json.dumps(outputs),
+            data=json.dumps(_strip_for_generic_analysis(outputs)),
         )
         db.add(row)
         await db.commit()
@@ -118,10 +132,15 @@ async def _save_run(run: Run) -> None:
 
 
 def _slim_outputs(outputs: dict[str, Any]) -> dict[str, Any]:
-    """Replace large string values (PDB/FASTA) with a sentinel so WS messages stay small."""
+    """Replace large strings (PDB/FASTA) and float embedding arrays with sentinels."""
     result = {}
     for k, v in outputs.items():
-        result[k] = "__artifact__" if (isinstance(v, str) and len(v) > 512) else v
+        if isinstance(v, str) and len(v) > 512:
+            result[k] = "__artifact__"
+        elif isinstance(v, list) and len(v) > 64 and v and isinstance(v[0], (int, float)):
+            result[k] = f"__embedding_{len(v)}d__"
+        else:
+            result[k] = v
     return result
 
 
@@ -494,11 +513,6 @@ async def execute_run(run_id: str) -> None:
 
 async def _maybe_continue_loop(run: Run, pipeline: Pipeline, run_id: str) -> None:
     """If this run is part of a loop campaign and more iterations remain, fire the next one."""
-    from app.core.loop_executor import (
-        _build_history_entry, _cancelled_loops, _extract_next_sequence,
-        _patch_pipeline, _save_loop,
-    )
-
     loop_node = next((n for n in pipeline.nodes if n.tool in _LOOP_END_TOOLS), None)
     if loop_node is None:
         return
@@ -513,6 +527,20 @@ async def _maybe_continue_loop(run: Run, pipeline: Pipeline, run_id: str) -> Non
         return
     iteration = run.iteration or 0
 
+    # Acquire per-loop lock so concurrent completions don't race to spawn duplicate iterations.
+    lock = _loop_continuation_locks.setdefault(loop_id, _asyncio.Lock())
+    async with lock:
+        await _do_continue_loop(loop_id, run_id, iteration, max_iterations, run, pipeline)
+
+
+async def _do_continue_loop(
+    loop_id: str, run_id: str, iteration: int, max_iterations: int, run: Run, pipeline: Pipeline
+) -> None:
+    from app.core.loop_executor import (
+        _build_history_entry, _cancelled_loops, _extract_next_sequence,
+        _patch_pipeline, _save_loop,
+    )
+
     if loop_id in _cancelled_loops:
         _cancelled_loops.discard(loop_id)
         async with AsyncSessionLocal() as db:
@@ -526,6 +554,13 @@ async def _maybe_continue_loop(run: Run, pipeline: Pipeline, run_id: str) -> Non
     async with AsyncSessionLocal() as db:
         loop_row = await db.get(LoopRunRow, loop_id)
         if loop_row is None:
+            return
+        # Idempotency guard: if another call already advanced past this iteration, bail out
+        if loop_row.current_iteration > iteration:
+            log.info(
+                "Loop %s — skipping duplicate continuation for iter %d (already at %d)",
+                loop_id, iteration, loop_row.current_iteration,
+            )
             return
         run_ids = json.loads(loop_row.run_ids or "[]")
         if run_id not in run_ids:
@@ -572,7 +607,10 @@ async def _maybe_continue_loop(run: Run, pipeline: Pipeline, run_id: str) -> Non
             await db.commit()
 
     log.info("Loop %s — iteration %d/%d — run %s", loop_id, iteration + 2, max_iterations, next_run.id)
-    await execute_run(next_run.id)
+    # Fire as a task so we exit the lock before the next iteration starts.
+    # Awaiting directly would deadlock: the new run's completion tries to acquire
+    # the same per-loop lock that we're currently holding.
+    _asyncio.ensure_future(execute_run(next_run.id))
 
 
 async def get_run(run_id: str) -> Run | None:
