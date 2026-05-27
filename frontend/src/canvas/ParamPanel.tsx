@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Database, BrainCircuit, X, Layers, Eye, Zap } from "lucide-react";
 import { useCanvasStore, type NodeData } from "./store";
-import { ComputePanel } from "./ComputePanel";
+import { ComputePanel, LoopEndPanel } from "./ComputePanel";
 import { listDatasets } from "@/api/datasets";
 import type { ArchitectureSpec } from "@/dnn_designer/store";
 
@@ -429,6 +429,10 @@ export function ParamPanel({ onOpenDNNDesigner }: ParamPanelProps = {}) {
     return <ComputePanel />;
   }
 
+  if (data.tool.id === "loop_end") {
+    return <LoopEndPanel />;
+  }
+
   const { tool, params } = data;
   const accentColor = CATEGORY_COLOR[tool.category] ?? "#94a3b8";
   const nodeOutputs = runNodeOutputs[node.id] ?? {};
@@ -529,7 +533,11 @@ export function ParamPanel({ onOpenDNNDesigner }: ParamPanelProps = {}) {
 
               <button
                 onClick={() => {
-                  const spec = (params.architecture_spec as ArchitectureSpec) ?? null;
+                  const raw = params.architecture_spec;
+                  const spec: ArchitectureSpec | null =
+                    raw && typeof raw === "object" && Array.isArray((raw as ArchitectureSpec).nodes)
+                      ? (raw as ArchitectureSpec)
+                      : null;
                   onOpenDNNDesigner(node!.id, spec, { inputs: upstreamInputs });
                 }}
                 className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg
@@ -540,7 +548,7 @@ export function ParamPanel({ onOpenDNNDesigner }: ParamPanelProps = {}) {
                 Design Architecture →
               </button>
 
-              {Boolean(params.architecture_spec) && (() => {
+              {Boolean(params.architecture_spec) && typeof params.architecture_spec === "object" && Array.isArray((params.architecture_spec as ArchitectureSpec).nodes) && (() => {
                 const spec = params.architecture_spec as ArchitectureSpec;
                 const layerCount = spec.nodes?.length ?? 0;
                 const types = [...new Set(spec.nodes?.map((n) => n.type) ?? [])];
@@ -591,7 +599,6 @@ export function ParamPanel({ onOpenDNNDesigner }: ParamPanelProps = {}) {
             const inputType = TYPE_INPUT[port.type] ?? "text";
             const value = params[port.name] ?? port.default ?? "";
             const isTextarea = port.type === "fasta" || port.type === "pdb";
-            const isCode = port.type === "python_code";
 
             return (
               <div key={port.name} className="flex flex-col gap-1.5">
@@ -629,18 +636,6 @@ export function ParamPanel({ onOpenDNNDesigner }: ParamPanelProps = {}) {
                     checked={Boolean(value)}
                     onChange={(e) => handleChange(port.name, e.target.checked)}
                     className="ml-3 w-4 h-4 accent-indigo-500"
-                  />
-                ) : isCode ? (
-                  <textarea
-                    value={String(value)}
-                    onChange={(e) => handleChange(port.name, e.target.value)}
-                    rows={14}
-                    spellCheck={false}
-                    placeholder={"# set next_heavy_chain and next_light_chain\nnext_heavy_chain = ..."}
-                    className="bg-canvas border border-cyan-800/40 rounded-lg px-3 py-2.5 text-xs
-                      font-mono text-slate-200 placeholder-slate-600 resize-y
-                      focus:outline-none focus:border-cyan-500/60 transition-colors w-full leading-relaxed"
-                    style={{ minHeight: "10rem", maxHeight: "60vh" }}
                   />
                 ) : isTextarea ? (
                   <textarea

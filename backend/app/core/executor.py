@@ -108,11 +108,14 @@ def _slim_run_data(run: Run) -> str:
     outputs so the stored blob stays small. Replaced with sentinel strings."""
     data = run.model_dump(mode="json")
     snap = data.get("pipeline_snapshot")
+    # Keys in node params that must never be slimmed — they're needed to re-open the UI.
+    _PARAMS_PRESERVE = {"architecture_spec", "code"}
     if isinstance(snap, dict):
         for node in snap.get("nodes", []):
             params = node.get("params") or {}
             node["params"] = {
-                k: "__large_omitted__" if isinstance(v, str) and len(v) > 50_000 else v
+                k: ("__large_omitted__" if isinstance(v, str) and len(v) > 50_000 else v)
+                   if k not in _PARAMS_PRESERVE else v
                 for k, v in params.items()
             }
     for nr in data.get("nodes", {}).values():

@@ -108,6 +108,11 @@ export const useDNNStore = create<DNNDesignerState>()((set, get) => ({
   setArchitectureName: (name) => set({ architectureName: name, dirty: true }),
 
   loadSpec: (spec) => {
+    if (!spec || !Array.isArray(spec.nodes)) {
+      // Guard against sentinel strings or malformed specs (e.g. "__large_omitted__")
+      get().reset();
+      return;
+    }
     _counter = 0;
     const nodes: Node<LayerNodeData>[] = spec.nodes.map((n) => {
       const num = parseInt(n.id.split("_").pop() ?? "0", 10);
