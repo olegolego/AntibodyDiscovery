@@ -73,6 +73,14 @@ def _coerce_scores(raw: Any) -> dict[str, float] | None:
 def _coerce_embeddings(raw: Any) -> dict[str, list[float]] | None:
     if not raw:
         return None
+    # Standard embedding output: {n, results: [{vh, vl, emb_vh, emb_vl}], metadata}
+    if isinstance(raw, dict) and "results" in raw:
+        out: dict[str, list[float]] = {}
+        for i, entry in enumerate(raw["results"]):
+            emb = entry.get("emb_vh") or entry.get("emb_vl")
+            if emb:
+                out[str(entry.get("vh") or f"seq_{i}")] = emb
+        return out or None
     if isinstance(raw, dict):
         result: dict[str, list[float]] = {}
         for k, v in raw.items():
@@ -80,6 +88,14 @@ def _coerce_embeddings(raw: Any) -> dict[str, list[float]] | None:
                 result[str(k)] = v
         return result or None
     if isinstance(raw, list) and raw:
+        # Raw results list: [{vh, vl, emb_vh, emb_vl}]
+        if isinstance(raw[0], dict):
+            out2: dict[str, list[float]] = {}
+            for i, entry in enumerate(raw):
+                emb = entry.get("emb_vh") or entry.get("emb_vl")
+                if emb:
+                    out2[str(entry.get("vh") or f"seq_{i}")] = emb
+            return out2 or None
         if isinstance(raw[0], (int, float)):
             return {"seq_0": raw}
         if isinstance(raw[0], list) and raw[0] and isinstance(raw[0][0], (int, float)):

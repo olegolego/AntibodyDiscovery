@@ -4,7 +4,6 @@ import logging
 from copy import deepcopy
 from datetime import datetime
 from typing import Any
-
 from sqlalchemy import select
 
 from app.db.models import DockingResultRow, LoopRunRow
@@ -60,11 +59,10 @@ async def _save_loop(
 
 def _build_accumulated_dataset(loop_history: list[dict]) -> dict | None:
     """Build accumulated {embeddings, scores_rank_1..4} dict from all history entries.
-
     Each entry must have been built by _build_history_entry which captures:
-      - vh: sequence identifier
-      - embedding: AbMAP 512d vector
-      - haddock_scores: {rank_1: float, rank_2: float, ...}
+    - vh: sequence identifier
+    - embedding: AbMAP 512d vector
+    - haddock_scores: {rank_1: float, rank_2: float, ...}
     """
     if not loop_history:
         return None
@@ -109,7 +107,28 @@ def _patch_pipeline(
         if node["tool"] in ("rcc_mlde", "dnn_mlde", "custom_dnn") and accumulated:
             node["params"] = {**node.get("params", {}), "accumulated_dataset": accumulated}
 
+        # Inject rolling policy_state into rl_designer nodes
+        accumulated_rl = _build_accumulated_rl_state(loop_history or [])
+        if node["tool"] == "rl_designer" and accumulated_rl:
+            node["params"] = {**node.get("params", {}), "policy_state": accumulated_rl}
+
     return Pipeline.model_validate(data)
+
+
+def _pick_fallback_sequence(loop_history: list[dict]) -> tuple[str | None, str | None]:
+    """Return the first saved fallback sequence that hasn't been evaluated yet.
+
+    Fallback sequences are stored in history entries as ``fallback_sequences``
+    (a list of top-K candidates from the ML node beyond the one that was
+    selected by loop_end).  We scan history newest-first so we prefer
+    candidates from the most recent model fit.
+    """
+    tested_vhs = {e.get("vh") for e in loop_history if e.get("vh")}
+    for entry in reversed(loop_history):
+        for seq in entry.get("fallback_sequences") or []:
+            if seq and seq not in tested_vhs:
+                return str(seq), None
+    return None, None
 
 
 def _extract_next_sequence(run: Run) -> tuple[str | None, str | None]:
@@ -134,7 +153,7 @@ def _extract_next_sequence(run: Run) -> tuple[str | None, str | None]:
 
 
 _ABMAP_TOOLS   = {"abmap"}
-_ESM_TOOLS     = {"esm_embedding", "ablang", "cheap_embedding"}
+_ESM_TOOLS     = {"esm_embedding", "ablang", "cheap_embedding", "aa_chem_embedding", "aa_onehot_embedding"}
 _HADDOCK_TOOLS = {"haddock3"}
 # Any tool that produces an embedding — used for history capture
 _EMBEDDING_TOOLS = _ABMAP_TOOLS | _ESM_TOOLS
@@ -163,12 +182,12 @@ async def _build_history_entry(run_id: str, iteration: int, run: Run) -> dict[st
     """Build a compact history entry from run results for injection into the next iteration.
 
     Captures per-iteration:
-      - vh / vl (sequence)
-      - embedding (AbMAP/ESM/AbLang vector for the evaluated sequence)
-      - haddock_scores: {"rank_1": float, ...} — from HADDOCK nodes OR from any node
+        - vh / vl (sequence)
+        - embedding (AbMAP/ESM/AbLang vector for the evaluated sequence)
+        - haddock_scores: {"rank_1": float, ...} — from HADDOCK nodes OR from any node
         whose ID ends with _r{N} (e.g. deepsp_r1, netsolp_r2, biophi_r3) and
         outputs a recognized numeric score key.
-      - haddock_score (legacy single-score compat)
+        - haddock_score (legacy single-score compat)
     These are consumed by _patch_pipeline to build the accumulated_dataset for dnn_mlde/rcc_mlde.
     """
     entry: dict[str, Any] = {"iteration": iteration}
@@ -229,15 +248,17 @@ async def _build_history_entry(run_id: str, iteration: int, run: Run) -> dict[st
         outs = node_run.outputs or {}
         tool  = snap_tool.get(node_id, "")
 
-        # ── Embedding capture (AbMAP, ESM, AbLang, CHEAP) ─────────────
-        # Prefer the "train" node over "cand" node for the embedding used in
-        # the accumulated history (cand embeds candidates, not the evaluated seq).
+        # ── Embedding capture (AbMAP, ESM, AbLang, CHEAP, AA-chem, AA-onehot) ──
+        # All embedding tools output standard {n, results: [{vh, vl, emb_vh, emb_vl}], metadata}.
+        # Prefer the "train" node over "cand" node — cand embeds candidates, not the evaluated seq.
         if tool in _EMBEDDING_TOOLS:
-            emb = outs.get("embedding")
-            if isinstance(emb, list) and emb and isinstance(emb[0], (int, float)):
+            from app.tools.embedding_utils import results_to_seq_emb_dict
+            emb_dict = results_to_seq_emb_dict(outs, chain="vh")
+            if emb_dict:
+                raw_emb = next(iter(emb_dict.values()))
                 is_train = "train" in node_id.lower() and "cand" not in node_id.lower()
                 if is_train or "embedding" not in entry:
-                    entry["embedding"] = emb
+                    entry["embedding"] = raw_emb
 
         # ── HADDOCK3 scores per rank ───────────────────────────────────
         if tool in _HADDOCK_TOOLS:
@@ -279,6 +300,47 @@ async def _build_history_entry(run_id: str, iteration: int, run: Run) -> dict[st
     except Exception:
         pass
 
+    # Save fallback candidates from the ML node (2nd, 3rd, 4th ranked sequences).
+    # These are used by _pick_fallback_sequence if the next iteration fails before
+    # loop_end can produce a next_heavy_chain (e.g. HADDOCK returns nothing).
+    _ML_TOOLS = {"rcc_mlde", "dnn_mlde", "custom_dnn"}
+    for node_id, node_run in run.nodes.items():
+        if node_run.status != "succeeded":
+            continue
+        if snap_tool.get(node_id, "") not in _ML_TOOLS:
+            continue
+        top_seqs = (node_run.outputs or {}).get("top_sequences")
+        if isinstance(top_seqs, list) and len(top_seqs) > 1:
+            # top_sequences[0] is what loop_end normally picks; save 1-3 as fallbacks
+            entry["fallback_sequences"] = [s for s in top_seqs[1:4] if s]
+            break  # one ML node is enough
+
+    # Capture RL policy_state from rl_designer nodes (rolling checkpoint — not merged like
+    # accumulated_dataset, just the most recent serialised Q-net + replay buffer).
+    for node_id, node_run in run.nodes.items():
+        if node_run.status != "succeeded":
+            continue
+        if snap_tool.get(node_id, "") != "rl_designer":
+            continue
+        ps = (node_run.outputs or {}).get("policy_state")
+        if isinstance(ps, dict) and ps:
+            entry["rl_policy_state"] = ps
+            break  # one rl_designer node per pipeline
+
     return entry
+
+
+def _build_accumulated_rl_state(loop_history: list[dict]) -> dict | None:
+    """Return the most recent rl_policy_state from history (rolling checkpoint).
+
+    Unlike accumulated_dataset (which merges all iterations), the RL policy
+    state is a self-contained checkpoint of network weights + replay buffer —
+    we only want the latest one so the agent continues from where it left off.
+    """
+    for entry in reversed(loop_history):
+        ps = entry.get("rl_policy_state")
+        if isinstance(ps, dict) and ps:
+            return ps
+    return None
 
 

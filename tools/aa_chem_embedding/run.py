@@ -157,9 +157,6 @@ def _run(inputs: dict) -> dict:
     return {
         "n": n,
         "results": results,
-        "embedding": results[0]["emb_vh"] if results else None,
-        "candidate_embeddings": {r["vh"]: r["emb_vh"] for r in results},
-        "sequences": {"n": n, "variants": results},
         "metadata": {
             "pool_mode": pool_mode,
             "dim": dim,

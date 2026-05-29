@@ -79,6 +79,5 @@ class AbMAPAdapter:
         return {
             "n": n,
             "results": results,
-            "sequences": {"n": n, "variants": results},
             "metadata": {"task": task, "embedding_type": embedding_type},
         }

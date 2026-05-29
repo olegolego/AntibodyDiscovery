@@ -264,7 +264,7 @@ async def _collect_gromacs_mmpbsa(
 
 _STRUCTURE_TOOLS = {"immunebuilder", "esmfold", "alphafold_monomer", "equifold"}
 _DESIGN_TOOLS    = {"proteinmpnn", "rfdiffusion", "biophi", "iglm", "progen2"}
-_EMBEDDING_TOOLS = {"abmap", "ablang", "esm_embedding", "cheap_embedding"}
+_EMBEDDING_TOOLS = {"abmap", "ablang", "esm_embedding", "cheap_embedding", "aa_chem_embedding", "aa_onehot_embedding"}
 
 _MAX_VARIANT_HANDLES = 10
 

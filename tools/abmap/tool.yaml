@@ -50,11 +50,6 @@ outputs:
     description: >
       List of n dicts: {vh, vl, emb_vh, emb_vl}.
       emb_vl is null when no VL was provided.
-  - name: sequences
-    type: json
-    description: >
-      Standard batch token: {n, variants: results} — wire directly to
-      developability_filter, custom_dnn, or any batch-aware downstream node.
   - name: metadata
     type: json
     description: task, embedding_type, num_mutations.

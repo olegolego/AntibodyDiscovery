@@ -56,15 +56,6 @@ outputs:
       List of n dicts: {vh, vl, emb_vh, emb_vl}.
       emb_vh: 20-dim (or L×20) float list. emb_vl is null when VL absent.
 
-  - name: embedding
-    type: json
-    description: emb_vh of the first sequence (single-sequence shorthand for loop wiring).
-
-  - name: candidate_embeddings
-    type: json
-    description: >
-      {sequence → emb_vh} dict for all sequences (shorthand for dnn_mlde/rcc_mlde).
-
   - name: metadata
     type: json
     description: pool_mode, dim (20), aa_order string.
