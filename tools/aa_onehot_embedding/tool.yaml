@@ -1,0 +1,75 @@
+id: aa_onehot_embedding
+name: AA One-Hot Embedding
+version: "1.0"
+category: sequence_embedding
+description: >
+  One-hot encoding of amino acid sequences. Each residue is mapped to a 20-dim
+  binary vector (one dimension per canonical amino acid, alphabetical order:
+  A C D E F G H I K L M N P Q R S T V W Y). Non-standard residues map to all-zeros.
+  Pooled with 'mean' gives the amino acid composition vector (a simple, fast baseline).
+  'per_residue' returns the full (L × 20) matrix. Zero-dependency: no GPU, no model download.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: false
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAK"
+    description: Single VH sequence (raw AA). Use 'sequences' for batch input.
+
+  - name: light_chain
+    type: fasta
+    required: false
+    default: ""
+    description: Single VL sequence. Leave empty to embed VH only.
+
+  - name: sequence
+    type: fasta
+    required: false
+    description: Alias for heavy_chain (single sequence mode).
+
+  - name: sequences
+    type: json
+    required: false
+    description: Batch list of {vh, vl?} dicts — overrides heavy_chain/light_chain.
+
+  - name: pool_mode
+    type: str
+    required: false
+    default: "mean"
+    options:
+      - "mean"
+      - "sum"
+      - "per_residue"
+    description: >
+      'mean' (default) → 20-dim AA composition vector (frequency of each AA).
+      'sum' → 20-dim AA count vector.
+      'per_residue' → (L × 20) binary matrix.
+
+outputs:
+  - name: n
+    type: int
+    description: Number of VH/VL pairs processed.
+
+  - name: results
+    type: json
+    description: >
+      List of n dicts: {vh, vl, emb_vh, emb_vl}.
+      emb_vh: 20-dim (or L×20) float list. emb_vl is null when VL absent.
+
+  - name: embedding
+    type: json
+    description: emb_vh of the first sequence (single-sequence shorthand for loop wiring).
+
+  - name: candidate_embeddings
+    type: json
+    description: >
+      {sequence → emb_vh} dict for all sequences (shorthand for dnn_mlde/rcc_mlde).
+
+  - name: metadata
+    type: json
+    description: pool_mode, dim (20), aa_order string.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 30

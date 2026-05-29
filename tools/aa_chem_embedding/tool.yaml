@@ -1,0 +1,80 @@
+id: aa_chem_embedding
+name: AA Chemical Embedding
+version: "1.0"
+category: sequence_embedding
+description: >
+  Fixed 19-dimensional physicochemical embedding of each amino acid.
+  Each residue is mapped to a vector of 19 biophysical properties drawn from the
+  AAindex database (Kyte-Doolittle hydrophobicity, Eisenberg hydrophobicity,
+  Hopp-Woods hydrophilicity, molecular weight, side-chain volume, steric parameter,
+  polarizability, formal charge, pI, Chou-Fasman helix/sheet/turn propensities,
+  flexibility, relative ASA, refractivity, H-bond donors/acceptors, aromaticity,
+  side-chain carbon count). All properties are z-score normalized across the 20 AAs.
+  Per-residue vectors are pooled (mean/max/per_residue) to a fixed embedding.
+  Zero-dependency: runs in the backend venv, no GPU, no model download.
+
+inputs:
+  - name: heavy_chain
+    type: fasta
+    required: false
+    default: "EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAK"
+    description: Single VH sequence (raw AA). Use 'sequences' for batch input.
+
+  - name: light_chain
+    type: fasta
+    required: false
+    default: ""
+    description: Single VL sequence. Leave empty to embed VH only.
+
+  - name: sequence
+    type: fasta
+    required: false
+    description: Alias for heavy_chain (single sequence mode).
+
+  - name: sequences
+    type: json
+    required: false
+    description: Batch list of {vh, vl?} dicts — overrides heavy_chain/light_chain.
+
+  - name: pool_mode
+    type: str
+    required: false
+    default: "mean"
+    options:
+      - "mean"
+      - "max"
+      - "per_residue"
+    description: >
+      Pooling across residue positions.
+      'mean' (default) → 19-dim vector.
+      'max' → 19-dim vector (max per property).
+      'per_residue' → (L × 19) matrix per chain.
+
+outputs:
+  - name: n
+    type: int
+    description: Number of VH/VL pairs processed.
+
+  - name: results
+    type: json
+    description: >
+      List of n dicts: {vh, vl, emb_vh, emb_vl}.
+      emb_vh: 19-dim (or L×19) float list. emb_vl is null when VL absent.
+
+  - name: embedding
+    type: json
+    description: emb_vh of the first sequence (single-sequence shorthand for loop wiring).
+
+  - name: candidate_embeddings
+    type: json
+    description: >
+      {sequence → emb_vh} dict for all sequences (shorthand for dnn_mlde/rcc_mlde).
+
+  - name: metadata
+    type: json
+    description: pool_mode, dim (19), feature_names list.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 60
