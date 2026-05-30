@@ -219,30 +219,6 @@ Will write 1 `node_analyses` row:
 
 ---
 
-### `property_predictor` (planned)
-
-Will write 1 `node_analyses` row:
-
-```json
-{
-  "embedding_model": "esm2_t33_650M",
-  "predictions": [
-    {
-      "id": "seq_001",
-      "affinity_dG": -9.2,
-      "tm_celsius": 72.4,
-      "aggregation_risk": 0.12,
-      "immunogenicity_risk": 0.08,
-      "developability_score": 0.91,
-      "flags": []
-    },
-    ...
-  ],
-  "ranking": ["seq_001", "seq_003", "seq_002", ...],
-  "embeddings": "<large float array — only stored if downstream tool needs it>"
-}
-```
-
 ---
 
 ## Migration plan (SQLite → Postgres)

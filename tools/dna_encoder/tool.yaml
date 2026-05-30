@@ -1,0 +1,33 @@
+id: dna_encoder
+name: DNA Encoder
+version: "1.0"
+category: sequence_design
+description: >
+  Codon-optimizes protein sequences for a target organism. Converts amino acid
+  sequences to codon-optimized DNA ready for gene synthesis (E. coli, human, yeast).
+  Mirrors the DNAEncoder tool from BioPipelines (Quargnali & Rivera-Fuentes 2026).
+
+inputs:
+  - name: sequence
+    type: fasta
+    required: true
+    default: "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG"
+    description: Amino acid sequence(s) to encode. Multi-record FASTA supported.
+  - name: organism
+    type: str
+    required: false
+    default: "EC"
+    description: "Target organism: EC=E. coli, HS=Homo sapiens, SC=S. cerevisiae, BS=B. subtilis"
+
+outputs:
+  - name: dna_sequences
+    type: fasta
+    description: Codon-optimized DNA sequences in FASTA format (one per input sequence)
+  - name: gc_content
+    type: json
+    description: Per-sequence GC content (%) and codon usage statistics
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 30

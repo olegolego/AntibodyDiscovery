@@ -68,6 +68,15 @@ _TOOL_NAMES: dict[str, str] = {
     "target_input": "Target Input",
     "ablang": "AbLang",
     "abmap": "AbMAP",
+    "equifold": "EquiFold",
+    "boltz2": "Boltz2",
+    "ligand_mpnn": "LigandMPNN",
+    "distance_selector": "Distance Selector",
+    "compound_library": "Compound Library",
+    "dna_encoder": "DNA Encoder",
+    "fuse": "Fuse",
+    "mutation_profiler": "Mutation Profiler",
+    "mutation_composer": "Mutation Composer",
 }
 
 def _has_analysis(outputs: dict[str, Any]) -> bool:
@@ -80,7 +89,8 @@ def _extract_metrics(tool_id: str, outputs: dict[str, Any]) -> _Metrics:
     M = _Metrics
 
     if tool_id == "immunebuilder":
-        errs: list = outputs.get("error_estimates") or []
+        raw_errs = outputs.get("error_estimates") or []
+        errs: list = raw_errs if isinstance(raw_errs, list) else []
         models = sum(1 for i in range(1, 5) if outputs.get(f"structure_{i}") is not None)
         if errs:
             mean_rmsd = round(sum(errs) / len(errs), 3)
@@ -95,13 +105,23 @@ def _extract_metrics(tool_id: str, outputs: dict[str, Any]) -> _Metrics:
     if tool_id == "esmfold":
         plddt = outputs.get("plddt")
         if isinstance(plddt, list) and plddt:
-            mean_p = round(sum(plddt) / len(plddt), 1)
+            # ESMFold server returns pLDDT in 0-1 range; normalise to 0-100 for display
+            raw_mean = sum(plddt) / len(plddt)
+            scale = 100.0 if raw_mean <= 1.0 else 1.0
+            mean_p = round(raw_mean * scale, 1)
             n = len(plddt)
-            high_pct = round(100 * sum(1 for v in plddt if v >= 70) / n, 1)
+            threshold_high = 70 / scale
+            threshold_very_high = 90 / scale
+            high_pct = round(100 * sum(1 for v in plddt if v >= threshold_high) / n, 1)
+            very_high_pct = round(100 * sum(1 for v in plddt if v >= threshold_very_high) / n, 1)
             conf = "high" if mean_p >= 80 else ("medium" if mean_p >= 60 else "low")
             return M(
                 primary=_rv("Mean pLDDT", mean_p),
-                secondary=[_rv("Residues", n), _rv("High conf", high_pct, "%")],
+                secondary=[
+                    _rv("Residues", n),
+                    _rv("High conf", high_pct, "%"),
+                    _rv("Very high", very_high_pct, "%"),
+                ],
                 confidence=conf,
             )
         return M(confidence="neutral")
@@ -153,6 +173,25 @@ def _extract_metrics(tool_id: str, outputs: dict[str, Any]) -> _Metrics:
             confidence="neutral",
         )
 
+    if tool_id == "equidock":
+        meta = outputs.get("metadata") or {}
+        t_mag = meta.get("translation_magnitude_A")
+        n_res = meta.get("ligand_residues")
+        dataset = str(meta.get("dataset", "dips")).upper()
+        if t_mag is not None:
+            # Both inputs are pre-centred, so t_mag is the docking-specific
+            # displacement only (not polluted by coordinate-frame offset).
+            # ≤20 Å = tight placement, ≤40 Å = reasonable, >40 Å = suspect.
+            conf = "high" if t_mag <= 20 else ("medium" if t_mag <= 40 else "low")
+            return M(
+                primary=_rv("Dock displacement", round(float(t_mag), 2), "Å"),
+                secondary=[
+                    _rv("Ligand residues", n_res),
+                    _rv("Checkpoint", dataset),
+                ],
+                confidence=conf,
+            )
+
     if tool_id == "gromacs_mmpbsa":
         dg = outputs.get("delta_g_bind")
         if dg is not None:
@@ -178,9 +217,45 @@ def _extract_metrics(tool_id: str, outputs: dict[str, Any]) -> _Metrics:
             confidence="neutral",
         )
 
+    if tool_id == "equifold":
+        meta = outputs.get("metadata") or {}
+        vh_len = meta.get("heavy_length")
+        vl_len = meta.get("light_length")
+        model_type = str(meta.get("model_type", "ab")).upper()
+        secondary = [_rv("VL length", vl_len, "AA")] if vl_len else []
+        secondary.append(_rv("Model", model_type))
+        return M(
+            primary=_rv("VH length", vh_len, "AA"),
+            secondary=secondary,
+            confidence="neutral",
+        )
+
     if tool_id == "superwater":
         wc = outputs.get("water_count") or {}
         return M(primary=_rv("Waters placed", wc.get("waters_placed")), confidence="neutral")
+
+    if tool_id == "boltz2":
+        prob = outputs.get("binding_probability")
+        aff = outputs.get("binding_affinity")
+        plddt = outputs.get("plddt")
+        mean_plddt = None
+        if isinstance(plddt, list) and plddt:
+            mean_plddt = round(sum(plddt) / len(plddt), 1)
+        conf = "high" if (prob or 0) >= 0.8 else ("medium" if (prob or 0) >= 0.5 else "low")
+        secondary = []
+        if mean_plddt is not None:
+            secondary.append(_rv("Mean pLDDT", mean_plddt))
+        if aff is not None:
+            secondary.append(_rv("Affinity", round(aff, 3), "µM"))
+        return M(
+            primary=_rv("Binding prob", round(prob, 3) if prob is not None else None),
+            secondary=secondary,
+            confidence=conf,
+        )
+
+    if tool_id == "ligand_mpnn":
+        seqs = outputs.get("sequences") or []
+        return M(primary=_rv("Sequences designed", len(seqs)), confidence="neutral")
 
     if tool_id == "biophi":
         vh = outputs.get("heavy_mutations") or 0
@@ -327,14 +402,36 @@ async def get_run_report(run_id: str, db: AsyncSession = Depends(get_db)):
     }
     node_order: list[str] = [n["id"] for n in snapshot.get("nodes", [])]
 
+    # Pre-fetch NodeAnalysisRow data keyed by node_id so we can restore stripped
+    # fields (e.g. plddt stored as __embedding_Nd__ sentinel) for metrics display.
+    analysis_rows = (await db.execute(
+        select(NodeAnalysisRow).where(NodeAnalysisRow.run_id == run_id)
+    )).scalars().all()
+    analysis_by_node: dict[str, dict] = {}
+    for ar in analysis_rows:
+        try:
+            analysis_by_node[ar.node_id] = json.loads(ar.data)
+        except Exception:
+            pass
+
     nodes: list[_NodeReport] = []
     for node_id in node_order:
         node_run = run.nodes.get(node_id)
         if node_run is None:
             continue
         tool_id = tool_map.get(node_id, "unknown")
-        outputs = node_run.outputs or {}
+        outputs = dict(node_run.outputs or {})
         status_str = node_run.status.value if hasattr(node_run.status, "value") else str(node_run.status)
+
+        # Restore sentinel-stripped scalars from the analysis row
+        if node_id in analysis_by_node:
+            analysis_data = analysis_by_node[node_id]
+            for key in ("plddt", "binding_probability", "binding_affinity"):
+                sentinel = outputs.get(key)
+                if isinstance(sentinel, str) and sentinel.startswith("__"):
+                    real = analysis_data.get(key)
+                    if real is not None:
+                        outputs[key] = real
 
         metrics: _Metrics | None = None
         if status_str == "succeeded":

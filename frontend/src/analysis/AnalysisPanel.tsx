@@ -239,12 +239,20 @@ function ImmuneBuilderGrid({ models }: { models: Array<{ index: number; data: No
           <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">
             Per-Residue Confidence (all models)
           </div>
-          <IbConfidenceChart rmsd={rmsd} />
-          <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-600 px-1">
-            <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-sky-400 inline-block" />≥ 85 very high</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-emerald-400 inline-block" />≥ 60 confident</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-red-400 inline-block" />&lt; 40 uncertain</span>
-          </div>
+          {rmsd.some((v) => v > 0) ? (
+            <>
+              <IbConfidenceChart rmsd={rmsd} />
+              <div className="flex items-center gap-3 mt-1 text-[10px] text-slate-600 px-1">
+                <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-sky-400 inline-block" />≥ 85 very high</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-emerald-400 inline-block" />≥ 60 confident</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-0.5 bg-red-400 inline-block" />&lt; 40 uncertain</span>
+              </div>
+            </>
+          ) : (
+            <div className="text-slate-500 text-xs text-center py-4">
+              Single model — per-residue confidence requires an ensemble (<code>num_models ≥ 2</code>)
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -323,7 +331,7 @@ function HADDOCK3View({ data }: { data: NodeAnalysis }) {
 
 const EQUIDOCK_METRICS: { key: string; label: string; hint: string; format?: (v: unknown) => string }[] = [
   { key: "ligand_residues",        label: "Ligand residues",       hint: "number of antibody residues docked" },
-  { key: "translation_magnitude_A",label: "Translation",           hint: "Å",   format: (v) => `${Number(v).toFixed(2)} Å` },
+  { key: "translation_magnitude_A",label: "Dock displacement",     hint: "Å from centred origin — ≤20 tight · ≤40 ok · >40 suspect", format: (v) => `${Number(v).toFixed(2)} Å` },
   { key: "dataset",                label: "Model checkpoint",       hint: "dips = 8-layer general · db5 = 5-layer Ab/Ag" },
   { key: "remove_clashes",         label: "Clash removal",         hint: "gradient-descent post-processing", format: (v) => v ? "enabled" : "disabled" },
 ];
@@ -384,9 +392,9 @@ function EquiDockView({ data }: { data: NodeAnalysis }) {
             sub="antibody residues"
           />
           <StatCard
-            label="Translation"
+            label="Dock Displacement"
             value={meta.translation_magnitude_A != null ? `${Number(meta.translation_magnitude_A).toFixed(1)} Å` : "—"}
-            sub="rigid body shift"
+            sub="≤20 tight · ≤40 ok · >40 suspect"
           />
           <StatCard
             label="Checkpoint"

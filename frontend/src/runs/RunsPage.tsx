@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import {
-  ArrowLeft, ChevronDown, ChevronRight, RefreshCw, RotateCcw, ExternalLink, XCircle, Trash2, FileBarChart, Repeat,
+  ArrowLeft, ChevronDown, ChevronRight, RefreshCw, RotateCcw, ExternalLink, XCircle, Trash2, FileBarChart, Repeat, PlayCircle,
 } from "lucide-react";
 import { listRuns, getRun, rerunRun, forceFailRun, deleteRun } from "@/api/runs";
-import { listLoopRuns, cancelLoopRun, type LoopRunSummary } from "@/api/loopRuns";
+import { listLoopRuns, cancelLoopRun, continueLoopRun, type LoopRunSummary } from "@/api/loopRuns";
 import type { NodeRun, NodeRunStatus, Run, RunStatus } from "@/types";
 
 // ── status style maps ─────────────────────────────────────────────────────────
@@ -233,10 +233,12 @@ const LOOP_STATUS_BADGE: Record<LoopRunSummary["status"], string> = {
   cancelled: "text-slate-500 bg-slate-500/10 border-slate-500/30",
 };
 
-function LoopCard({ loop, onCancel, cancelling, onOpen }: {
+function LoopCard({ loop, onCancel, cancelling, onContinue, continuing, onOpen }: {
   loop: LoopRunSummary;
   onCancel: (id: string) => void;
   cancelling: boolean;
+  onContinue: (id: string) => void;
+  continuing: boolean;
   onOpen?: (runId: string) => void;
 }) {
   const progress = Math.round((loop.run_ids_count / loop.max_iterations) * 100);
@@ -297,6 +299,21 @@ function LoopCard({ loop, onCancel, cancelling, onOpen }: {
               {cancelling ? "Cancelling…" : "Cancel"}
             </button>
           )}
+          {(loop.status === "cancelled" || loop.status === "succeeded" ||
+            (loop.status === "running" && loop.latest_run_status != null &&
+             ["failed", "cancelled"].includes(loop.latest_run_status))) && (
+            <button
+              onClick={() => onContinue(loop.loop_id)}
+              disabled={continuing}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium
+                text-emerald-400 hover:bg-emerald-500/10 border border-emerald-500/30 transition-colors
+                disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Continue this loop from where it stopped"
+            >
+              <PlayCircle size={11} />
+              {continuing ? "Starting…" : "Continue"}
+            </button>
+          )}
           {loop.stop_reason && (
             <span className="text-[10px] text-slate-600 italic truncate max-w-[100px]" title={loop.stop_reason}>
               {loop.stop_reason}
@@ -327,6 +344,7 @@ export function RunsPage({ onBack, onOpenRun, onViewReport }: RunsPageProps) {
   const [forceFailingId, setForceFailingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [cancellingLoopId, setCancellingLoopId] = useState<string | null>(null);
+  const [continuingLoopId, setContinuingLoopId] = useState<string | null>(null);
 
   async function fetchRuns() {
     try {
@@ -411,6 +429,18 @@ export function RunsPage({ onBack, onOpenRun, onViewReport }: RunsPageProps) {
       console.error("Cancel loop failed:", err);
     } finally {
       setCancellingLoopId(null);
+    }
+  }
+
+  async function handleContinueLoop(loopId: string) {
+    setContinuingLoopId(loopId);
+    try {
+      await continueLoopRun(loopId);
+      await fetchLoops();
+    } catch (err) {
+      console.error("Continue loop failed:", err);
+    } finally {
+      setContinuingLoopId(null);
     }
   }
 
@@ -546,6 +576,8 @@ export function RunsPage({ onBack, onOpenRun, onViewReport }: RunsPageProps) {
                     loop={loop}
                     onCancel={handleCancelLoop}
                     cancelling={cancellingLoopId === loop.loop_id}
+                    onContinue={handleContinueLoop}
+                    continuing={continuingLoopId === loop.loop_id}
                     onOpen={handleOpenRun}
                   />
                 ))}

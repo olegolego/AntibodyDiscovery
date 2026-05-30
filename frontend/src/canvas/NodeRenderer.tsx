@@ -18,6 +18,9 @@ const CATEGORY_STYLE: Record<string, { border: string; label: string; glow: stri
   mutagenesis:          { border: "#f59e0b", label: "text-amber-300",   glow: "rgba(245,158,11,0.25)"  },
   bioinformatics:       { border: "#2dd4bf", label: "text-teal-300",    glow: "rgba(45,212,191,0.2)"   },
   control_flow:         { border: "#06b6d4", label: "text-cyan-300",    glow: "rgba(6,182,212,0.25)"   },
+  design:               { border: "#f472b6", label: "text-pink-300",    glow: "rgba(244,114,182,0.2)"  },
+  ml:                   { border: "#a3e635", label: "text-lime-300",    glow: "rgba(163,230,53,0.2)"   },
+  loop:                 { border: "#facc15", label: "text-yellow-300",  glow: "rgba(250,204,21,0.25)"  },
   debug:                { border: "#94a3b8", label: "text-slate-400",   glow: "rgba(148,163,184,0.15)" },
 };
 

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, X, FlaskConical, Square, FileBarChart, RefreshCw, Database } from "lucide-react";
+import { ChevronDown, ChevronRight, X, FlaskConical, Square, FileBarChart, RefreshCw, Database, PlayCircle } from "lucide-react";
 import { useRunWebSocket } from "@/hooks/useRunWebSocket";
 import { useCanvasStore } from "@/canvas/store";
 import { createDatasetFromRun, listDatasets } from "@/api/datasets";
 import type { Dataset } from "@/api/datasets";
-import type { LoopRun } from "@/api/loopRuns";
+import { continueLoopRun, type LoopRun } from "@/api/loopRuns";
 import type { NodeRun, NodeRunStatus, Run, RunStatus } from "@/types";
 
 const STATUS_COLOR: Record<RunStatus | NodeRunStatus, string> = {
@@ -47,7 +47,8 @@ function NodeRunRow({ nodeRun, onAnalysis }: NodeRunRowProps) {
     nodeRun.outputs?.best_complex != null ||
     nodeRun.outputs?.hydrated_structure != null ||
     nodeRun.outputs?.top_scores != null ||
-    nodeRun.outputs?.delta_g_bind != null
+    nodeRun.outputs?.delta_g_bind != null ||
+    nodeRun.outputs?.binding_probability != null
   );
 
   const selectNode    = useCanvasStore((s) => s.selectNode);
@@ -217,6 +218,7 @@ interface RunPanelProps {
   onClose: () => void;
   onOpenAnalysis: (runId: string, nodeId: string) => void;
   onViewReport?: (runId: string) => void;
+  onContinueLoop?: () => void;
 }
 
 function useElapsed(createdAt: string | undefined, active: boolean): string {
@@ -235,9 +237,10 @@ function useElapsed(createdAt: string | undefined, active: boolean): string {
   return elapsed;
 }
 
-export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClose, onOpenAnalysis, onViewReport }: RunPanelProps) {
+export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClose, onOpenAnalysis, onViewReport, onContinueLoop }: RunPanelProps) {
   const [run, setRun] = useState<Run | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [continuingLoop, setContinuingLoop] = useState(false);
   const setRunNodeStatuses = useCanvasStore((s) => s.setRunNodeStatuses);
   const setRunNodeOutputs = useCanvasStore((s) => s.setRunNodeOutputs);
   const runNodeStatuses = useCanvasStore((s) => s.runNodeStatuses);
@@ -340,6 +343,17 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
     }
   }
 
+  async function handleContinueLoop() {
+    if (!loopRunId || continuingLoop) return;
+    setContinuingLoop(true);
+    try {
+      await continueLoopRun(loopRunId);
+      onContinueLoop?.();
+    } finally {
+      setContinuingLoop(false);
+    }
+  }
+
   const isLoop = !!loopRunId && !!loopData;
   const loopDone = loopData?.status !== "running";
   const canSave = isLoop
@@ -413,6 +427,22 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
                 ? <RefreshCw size={10} className="animate-spin" />
                 : <Square size={10} fill="currentColor" />}
               {cancelling ? "Cancelling…" : "Cancel Loop"}
+            </button>
+          )}
+          {isLoop && (loopData?.status === "cancelled" || loopData?.status === "succeeded" ||
+            (loopData?.status === "running" && (run?.status === "failed" || run?.status === "cancelled"))) && (
+            <button
+              onClick={handleContinueLoop}
+              disabled={continuingLoop}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
+                bg-emerald-950/60 border border-emerald-800/50 text-emerald-400 hover:bg-emerald-900/60
+                hover:text-emerald-300 transition-colors disabled:opacity-60"
+              title="Continue this loop from where it stopped"
+            >
+              {continuingLoop
+                ? <RefreshCw size={10} className="animate-spin" />
+                : <PlayCircle size={10} />}
+              {continuingLoop ? "Starting…" : "Continue"}
             </button>
           )}
           <button
@@ -551,7 +581,7 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
                       const regressed = prev !== null && entry.best_score !== null && entry.best_score > prev;
                       return (
                         <tr key={entry.iteration} className={`border-b border-border/40 last:border-0 ${isBest ? "bg-emerald-500/5" : ""}`}>
-                          <td className="px-3 py-1.5 text-slate-500 font-mono">{entry.iteration}</td>
+                          <td className="px-3 py-1.5 text-slate-500 font-mono">{entry.iteration + 1}</td>
                           <td className="px-3 py-1.5 text-slate-400 font-mono truncate max-w-[80px]" title={entry.vh_prefix}>
                             {entry.vh_cdr3 ?? `…${entry.vh_prefix.slice(-14)}`}
                           </td>
@@ -571,7 +601,7 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
                     })}
                     {showPending && (
                       <tr className="border-t border-border/40">
-                        <td className="px-3 py-1.5 text-slate-600 font-mono">{loopData.current_iteration}</td>
+                        <td className="px-3 py-1.5 text-slate-600 font-mono">{loopData.current_iteration + 1}</td>
                         <td className="px-3 py-1.5 text-slate-700 font-mono italic" colSpan={2}>running…</td>
                         <td className="px-1 py-1.5">
                           <span className="inline-block w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />

@@ -37,7 +37,14 @@ class CDRMutatorAdapter:
         num_mutations = int(inputs.get("num_mutations", 3))
         num_variants  = int(inputs.get("num_variants", 10))
         scheme        = str(inputs.get("scheme", "imgt")).strip().lower()
-        seed          = int(inputs.get("seed", 42))
+        seed_param = inputs.get("seed")
+        if seed_param is not None:
+            # Explicit seed wired from canvas — honour it (deterministic replay)
+            seed = int(seed_param)
+        else:
+            # In a loop, derive seed from the run_id so each loop iteration/replay
+            # explores a different neighbourhood even from the same starting sequence.
+            seed = abs(hash(run_ctx.run_id)) % (2**31)
 
         # CDR checkboxes (v1.1+) — pass through as-is; run.py handles defaults
         cdr_h1 = bool(inputs.get("cdr_h1", True))

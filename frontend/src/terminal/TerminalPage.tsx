@@ -14,6 +14,11 @@ const CATEGORY_COLOR: Record<string, string> = {
   docking:              "#f97316",
   toolbox:              "#e879f9",
   compute:              "#818cf8",
+  bioinformatics:       "#2dd4bf",
+  control_flow:         "#06b6d4",
+  design:               "#f472b6",
+  ml:                   "#a3e635",
+  loop:                 "#facc15",
   debug:                "#94a3b8",
 };
 
@@ -113,6 +118,19 @@ const STATIC_ENDPOINTS: { section: string; color: string; endpoints: ApiEndpoint
     endpoints: [
       { method: "GET", path: "/health", description: "Backend health check" },
       { method: "GET", path: "/ws/{run_id}", description: "WebSocket: subscribe to live run updates" },
+    ],
+  },
+  {
+    section: "External Tool Servers",
+    color: "#a78bfa",
+    endpoints: [
+      { method: "GET", path: "http://localhost:8003/health",  description: "ProteinMPNN — inverse folding (port 8003)" },
+      { method: "GET", path: "http://localhost:8004/health",  description: "ESMFold — structure prediction (port 8004)" },
+      { method: "GET", path: "http://localhost:8005/health",  description: "AbMAP — antibody embedding (port 8005)" },
+      { method: "GET", path: "http://localhost:8006/health",  description: "CHEAP Embedding — lightweight embedding (port 8006)" },
+      { method: "GET", path: "http://localhost:8010/health",  description: "Boltz2 — structure + binding affinity (port 8010, GPU required — see tools/boltz2/SETUP.md)" },
+      { method: "POST", path: "http://localhost:8010/predict", description: "Boltz2 predict: {sequence, light_chain, ligand_smiles, ligand_name}",
+        body: '{"sequence": "EVQL...", "light_chain": "DIQM...", "ligand_smiles": "CC(C)Cc1ccc(cc1)C(C)C(=O)O", "ligand_name": "LIG"}' },
     ],
   },
 ];

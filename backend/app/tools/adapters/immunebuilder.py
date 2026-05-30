@@ -30,6 +30,12 @@ class ImmuneBuilderAdapter:
         heavy_raw = inputs.get("heavy_chain", "")
         light_raw = inputs.get("light_chain", "")
 
+        # When wired from cdr_mutator variant output, heavy_raw may be a dict
+        # {heavy_chain: str, light_chain: str} — unwrap it
+        if isinstance(heavy_raw, dict):
+            light_raw = light_raw or heavy_raw.get("light_chain", "")
+            heavy_raw = heavy_raw.get("heavy_chain", "")
+
         # Validate early so we don't burn cache on bad input
         heavy = _clean_sequence(str(heavy_raw))
         light = _clean_sequence(str(light_raw)) if light_raw else ""
@@ -41,7 +47,7 @@ class ImmuneBuilderAdapter:
         cache_inputs = {
             "heavy_chain": heavy,
             "light_chain": light,
-            "num_models": max(1, min(4, int(inputs.get("num_models", 4)))),
+            "num_models": 4,  # always 4: per-residue RMSD is meaningless with <2 models
         }
         cached = await self._cache.get(cache_inputs)
         if cached is not None:

@@ -1,0 +1,60 @@
+id: mutation_composer
+name: Mutation Composer
+version: "1.0"
+category: sequence_design
+description: >
+  Generates candidate mutant sequences via weighted random sampling from per-position
+  amino acid frequency profiles. Use after MutationProfiler to sample diverse
+  variants biased toward frequently observed mutations.
+  From BioPipelines (Quargnali & Rivera-Fuentes 2026), Application 5.
+
+inputs:
+  - name: original
+    type: fasta
+    required: true
+    default: "ACDEFGHIKLMNPQRSTVWY"
+    description: Original (wild-type) sequence to mutate from
+
+  - name: frequencies
+    type: json
+    required: true
+    default: '{}'
+    description: >
+      Per-position AA frequencies from MutationProfiler output
+      (absolute_frequencies or relative_frequencies format).
+
+  - name: num_sequences
+    type: int
+    required: false
+    default: 10
+    description: Number of candidate sequences to generate
+
+  - name: mode
+    type: str
+    required: false
+    default: "weighted_random"
+    description: >
+      Sampling mode: weighted_random (sample proportional to frequency),
+      top1 (always pick highest-frequency AA), or uniform_random.
+
+  - name: max_mutations
+    type: int
+    required: false
+    default: 3
+    description: Maximum number of positions to mutate per generated sequence
+
+outputs:
+  - name: sequences
+    type: json
+    description: >
+      List of generated AA sequences (strings).
+
+  - name: candidates
+    type: json
+    description: >
+      Detailed list: [{sequence: str, mutations: [{pos, wt, mut}, ...]}, ...]
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 30

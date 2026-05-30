@@ -1,0 +1,41 @@
+id: compound_library
+name: Compound Library
+version: "1.0"
+category: toolbox
+description: >
+  Creates a compound library from a SMILES dictionary or list. Supports combinatorial
+  generation from branching points. Outputs a list of compounds with names and SMILES
+  strings for use with structure prediction tools (e.g., Boltz2).
+  From BioPipelines (Quargnali & Rivera-Fuentes 2026), Application 3.
+
+inputs:
+  - name: smiles_dict
+    type: json
+    required: false
+    default: '{"trp": "C1=CC2=C(C=C1)C(CC(N)C(=O)O)=CN2", "5-hydroxy-trp": "C1=CC2=C(C=C1O)C(CC(N)C(=O)O)=CN2", "methyl-trp": "CC1=CC2=C(N1)C=CC=C2CC(N)C(=O)O"}'
+    description: >
+      JSON dict mapping compound names to SMILES strings.
+      E.g. {"aspirin": "CC(=O)Oc1ccccc1C(=O)O", "ibuprofen": "CC(C)Cc1ccc(cc1)C(C)C(=O)O"}
+  - name: compounds_list
+    type: json
+    required: false
+    default: "[]"
+    description: >
+      Alternative: JSON list of {name, smiles} dicts.
+
+outputs:
+  - name: compounds
+    type: json
+    description: >
+      List of compound objects: [{name: str, smiles: str, index: int}]
+  - name: n_compounds
+    type: json
+    description: Number of compounds in the library
+  - name: table
+    type: json
+    description: Same as compounds but as a flat table for downstream use
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 10

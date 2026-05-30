@@ -1,0 +1,46 @@
+id: mutation_profiler
+name: Mutation Profiler
+version: "1.0"
+category: sequence_design
+description: >
+  Analyzes per-position amino acid frequencies across a set of variant sequences
+  compared to an original (wild-type) sequence. Outputs absolute and relative
+  mutation frequencies for use with MutationComposer.
+  From BioPipelines (Quargnali & Rivera-Fuentes 2026), Application 5.
+
+inputs:
+  - name: original
+    type: fasta
+    required: true
+    default: "ACDEFGHIKLMNPQRSTVWY"
+    description: Original (wild-type) amino acid sequence
+
+  - name: mutants
+    type: json
+    required: true
+    default: '["ACDEFGHIKLMNPQRSTVWY", "ACDEFGHIKLMNPQRSTVWY"]'
+    description: >
+      JSON list of variant sequences (same length as original).
+      Can also be a list of FASTA strings or a list of dicts with a "sequence" key.
+
+outputs:
+  - name: absolute_frequencies
+    type: json
+    description: >
+      Per-position amino acid counts: {pos_idx: {AA: count, ...}, ...}.
+      Positions are 0-indexed. Counts include the original sequence.
+
+  - name: relative_frequencies
+    type: json
+    description: >
+      Per-position amino acid probabilities (normalized): {pos_idx: {AA: float, ...}, ...}.
+
+  - name: mutation_summary
+    type: json
+    description: >
+      Summary: {n_sequences, n_positions, top_mutations: [{pos, wt, mut, freq}, ...]}.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 30

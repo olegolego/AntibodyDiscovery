@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { X, Play, RefreshCw, Code2, Sparkles, Loader2 } from "lucide-react";
+import { X, Play, RefreshCw, Code2, Sparkles, Loader2, RotateCcw, Info } from "lucide-react";
 import CodeMirror from "@uiw/react-codemirror";
 import { python } from "@codemirror/lang-python";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -471,6 +471,307 @@ export function ComputePanel() {
       nodes={nodes}
       edges={edges}
       runNodeOutputs={runNodeOutputs}
+      selectNode={selectNode}
+      updateNodeParams={updateNodeParams}
+    />
+  );
+}
+
+// ── Loop End Panel ────────────────────────────────────────────────────────────
+
+function LoopEndPanelInner({
+  node,
+  nodes,
+  edges,
+  selectNode,
+  updateNodeParams,
+}: {
+  node: ReturnType<typeof useCanvasStore.getState>["nodes"][number];
+  nodes: ReturnType<typeof useCanvasStore.getState>["nodes"];
+  edges: ReturnType<typeof useCanvasStore.getState>["edges"];
+  selectNode: (id: string | null) => void;
+  updateNodeParams: (id: string, params: Record<string, unknown>) => void;
+}) {
+  const data = node.data as NodeData;
+  const code = String(data.params.code ?? "");
+
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [infoOpen, setInfoOpen] = useState(false);
+
+  // Build upstream variable list (same pattern as ComputePanel)
+  const incomingVars = (() => {
+    const vars: { varName: string; type: string; sourceNodeName: string }[] = [];
+    const srcIds = [...new Set(edges.filter((e) => e.target === node.id).map((e) => e.source))];
+    for (const srcId of srcIds) {
+      const srcNode = nodes.find((n) => n.id === srcId);
+      const srcTool = (srcNode?.data as NodeData | undefined)?.tool;
+      if (!srcTool) continue;
+      for (const port of srcTool.outputs) {
+        vars.push({ varName: `${srcId}_${port.name}`, type: port.type, sourceNodeName: srcTool.name });
+      }
+    }
+    return vars;
+  })();
+
+  // All variables available in the loop end scope
+  const loopVars = [
+    { varName: "loop_iteration", type: "int",  desc: "Current iteration index (0-based)" },
+    { varName: "loop_history",   type: "json", desc: "List of dicts — one per completed iteration, each with heavy_chain, light_chain, and any scores" },
+  ];
+
+  function setCode(v: string) {
+    updateNodeParams(node.id, { ...data.params, code: v });
+  }
+
+  async function handleAiGenerate() {
+    if (!aiPrompt.trim()) return;
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const allVars = [
+        ...incomingVars.map((v) => ({ name: v.varName, type: v.type, description: `from ${v.sourceNodeName}` })),
+        ...loopVars.map((v) => ({ name: v.varName, type: v.type, description: v.desc })),
+      ];
+      const resp = await fetch("/ws/compute/generate", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          prompt: aiPrompt + "\n\nMust assign: next_heavy_chain (str). Optionally assign next_light_chain (str). These become the inputs for the next loop iteration.",
+          variables: allVars,
+        }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+        throw new Error(err.detail ?? "Generation failed");
+      }
+      const { code: generated } = await resp.json() as { code: string };
+      setCode(generated);
+      setAiOpen(false);
+      setAiPrompt("");
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiLoading(false);
+    }
+  }
+
+  return (
+    <div
+      className="w-[480px] shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden"
+      style={{ borderTopColor: "#06b6d4", borderTopWidth: 2 }}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
+        <div className="flex items-center gap-2">
+          <RotateCcw size={15} className="text-cyan-400" />
+          <div>
+            <div className="text-sm font-bold text-white">Loop End · Selection code</div>
+            <div className="text-xs text-slate-500">Picks the next sequence for the next iteration</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setInfoOpen((v) => !v)}
+            title={infoOpen ? "Collapse parameters" : "Show parameters"}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold transition-colors ${
+              infoOpen
+                ? "text-cyan-300 bg-cyan-900/30 border border-cyan-700/40"
+                : "text-slate-500 hover:text-cyan-400 border border-transparent hover:border-cyan-800/40"
+            }`}
+          >
+            <Info size={11} />
+            <span>{infoOpen ? "Hide" : "Params"}</span>
+          </button>
+          <button
+            onClick={() => selectNode(null)}
+            className="text-slate-500 hover:text-white transition-colors p-1 rounded hover:bg-white/5"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+
+        {/* Collapsible info sections */}
+        {infoOpen && (
+          <>
+            {/* How it works */}
+            <div className="px-4 py-2 border-b border-border/60 shrink-0">
+              <div className="text-[11px] text-slate-400 leading-relaxed space-y-1.5 pb-0.5">
+                <p>
+                  At the end of each iteration, this code runs in an isolated Python sandbox.
+                  All upstream node outputs are injected as variables (<code className="text-cyan-300">nodeId_outputName</code>).
+                </p>
+                <p>
+                  Your code must assign <code className="text-cyan-300">next_heavy_chain</code> — this becomes
+                  the VH input to <strong>Loop Start</strong> for the next iteration.
+                  The loop stops when <code className="text-cyan-300">max_iterations</code> is reached
+                  or you raise <code className="text-cyan-300">StopIteration("reason")</code>.
+                </p>
+              </div>
+            </div>
+
+            {/* Available variables */}
+            <div className="px-4 py-2.5 border-b border-border/60 shrink-0">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-2">
+                Available variables
+              </div>
+
+              {/* Loop-specific (always present) */}
+              <div className="flex flex-col gap-1 mb-2">
+                {loopVars.map(({ varName, type, desc }) => (
+                  <div key={varName} className="flex items-center gap-2">
+                    <span className="inline-flex items-center gap-1.5 pl-2 pr-1.5 py-0.5 rounded-md
+                      bg-cyan-950/50 border border-cyan-800/40 cursor-default">
+                      <span className="text-xs font-mono text-cyan-300">{varName}</span>
+                      <span className="text-[9px] font-bold uppercase tracking-wide px-1 py-px rounded
+                        border text-sky-400 bg-sky-950/60 border-sky-800/40">{type}</span>
+                    </span>
+                    <span className="text-[10px] text-slate-500">{desc}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Upstream node outputs */}
+              {incomingVars.length > 0 ? (
+                <div className="flex flex-col gap-1">
+                  <div className="text-[9px] font-bold uppercase tracking-widest text-slate-600 mb-0.5">
+                    From connected nodes
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {incomingVars.map(({ varName, type, sourceNodeName }) => (
+                      <span key={varName} title={`from ${sourceNodeName}`}
+                        className="inline-flex items-center gap-1.5 pl-2 pr-1.5 py-0.5 rounded-md
+                          bg-indigo-950/60 border border-indigo-700/40 cursor-default">
+                        <span className="text-xs font-mono text-indigo-300">{varName}</span>
+                        <TypeBadge type={type} />
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[11px] text-slate-600">
+                  Connect upstream nodes to inject their outputs as variables.
+                </p>
+              )}
+            </div>
+
+            {/* Required outputs reminder */}
+            <div className="px-4 py-2 border-b border-border/60 shrink-0">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1.5">
+                Must assign
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                  <code className="text-xs font-mono text-cyan-300">next_heavy_chain</code>
+                  <span className="text-[10px] text-slate-600">str — VH</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400/50" />
+                  <code className="text-xs font-mono text-cyan-300/70">next_light_chain</code>
+                  <span className="text-[10px] text-slate-600">str — optional VL</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-400/50" />
+                  <code className="text-xs font-mono text-slate-500">raise StopIteration("reason")</code>
+                  <span className="text-[10px] text-slate-600">early stop</span>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* AI generate bar */}
+        {aiOpen && (
+          <div className="px-3 py-2.5 border-b border-border/60 bg-cyan-950/20 shrink-0 space-y-2">
+            <textarea
+              autoFocus
+              rows={2}
+              className="w-full bg-canvas border border-cyan-700/40 rounded-lg px-3 py-2 text-xs
+                text-slate-200 placeholder-slate-600 resize-none focus:outline-none
+                focus:border-cyan-500/60 font-sans leading-relaxed"
+              placeholder="e.g. 'pick the sequence with the lowest HADDOCK score from loop_history'"
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleAiGenerate();
+                if (e.key === "Escape") { setAiOpen(false); setAiError(null); }
+              }}
+            />
+            {aiError && <p className="text-[11px] text-red-400">{aiError}</p>}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleAiGenerate}
+                disabled={aiLoading || !aiPrompt.trim()}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+                  bg-cyan-600 text-white hover:bg-cyan-500 disabled:opacity-50
+                  disabled:cursor-not-allowed transition-all"
+              >
+                {aiLoading
+                  ? <><Loader2 size={11} className="animate-spin" /><span>Generating…</span></>
+                  : <><Sparkles size={11} /><span>Generate</span></>
+                }
+              </button>
+              <span className="text-[10px] text-slate-600">⌘↵ to generate · Esc to cancel</span>
+            </div>
+          </div>
+        )}
+
+        {/* Code editor */}
+        <div className="flex-1 overflow-hidden min-h-0">
+          <CodeMirror
+            value={code}
+            onChange={setCode}
+            theme={oneDark}
+            extensions={[python()]}
+            height="100%"
+            style={{ fontSize: 12, height: "100%" }}
+            basicSetup={{
+              lineNumbers: true,
+              foldGutter: false,
+              highlightActiveLine: true,
+              autocompletion: true,
+            }}
+          />
+        </div>
+
+        {/* Toolbar */}
+        <div className="px-3 py-2 border-t border-border flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => { setAiOpen((v) => !v); setAiError(null); }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold
+              border transition-all ${
+                aiOpen
+                  ? "bg-cyan-700/40 text-cyan-200 border-cyan-600/60"
+                  : "text-cyan-400 border-cyan-700/40 hover:bg-cyan-900/30 hover:text-cyan-300"
+              }`}
+          >
+            <Sparkles size={11} />
+            <span>Generate with AI</span>
+          </button>
+          <span className="text-[10px] text-slate-600 ml-auto">
+            Code runs server-side at end of each iteration
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function LoopEndPanel() {
+  const { nodes, edges, selectedNodeId, selectNode, updateNodeParams } = useCanvasStore();
+  const node = nodes.find((n) => n.id === selectedNodeId);
+  if (!node) return null;
+  return (
+    <LoopEndPanelInner
+      node={node}
+      nodes={nodes}
+      edges={edges}
       selectNode={selectNode}
       updateNodeParams={updateNodeParams}
     />

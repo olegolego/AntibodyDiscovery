@@ -1,0 +1,39 @@
+id: distance_selector
+name: Distance Selector
+version: "1.0"
+category: toolbox
+description: >
+  Selects protein residues within a specified distance (Angstroms) of a ligand
+  in a PDB structure. Used to identify binding pocket residues for targeted
+  sequence redesign. From BioPipelines (Quargnali & Rivera-Fuentes 2026), Application 5.
+
+inputs:
+  - name: structure
+    type: pdb
+    required: true
+    default: ""
+    description: Input PDB structure containing the protein and ligand
+  - name: ligand
+    type: str
+    required: false
+    default: "LIG"
+    description: Residue name of the ligand in the PDB (e.g. LIG, HIS, ATP)
+  - name: distance
+    type: float
+    required: false
+    default: 5.0
+    description: Distance cutoff in Angstroms
+
+outputs:
+  - name: selections
+    type: json
+    description: >
+      Pocket residues: {within: [{chain, resnum, resname, min_dist_A}, ...], n_residues: int}
+  - name: residue_indices
+    type: json
+    description: List of (chain, resnum) tuples for the selected residues
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 30

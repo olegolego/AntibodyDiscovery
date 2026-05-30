@@ -46,7 +46,7 @@ export CHEAP_EMBEDDING_PORT
 export CHEAP_EMBEDDING_URL
 
 # Export tool URLs so the backend picks them up from the environment.
-export ABMAP_URL ALPHAFOLD_URL RFDIFFUSION_URL PROTEINMPNN_URL ESMFOLD_URL CHEAP_EMBEDDING_URL
+export ABMAP_URL ALPHAFOLD_URL RFDIFFUSION_URL PROTEINMPNN_URL ESMFOLD_URL CHEAP_EMBEDDING_URL BOLTZ2_URL
 
 # ── Kill any existing processes on known ports ────────────────────────────────
 echo "Stopping existing processes..."
@@ -56,6 +56,7 @@ lsof -ti:${ABMAP_PORT}        | xargs kill -9 2>/dev/null || true
 lsof -ti:${PROTEINMPNN_PORT}  | xargs kill -9 2>/dev/null || true
 lsof -ti:${ESMFOLD_PORT}          | xargs kill -9 2>/dev/null || true
 lsof -ti:${CHEAP_EMBEDDING_PORT}  | xargs kill -9 2>/dev/null || true
+lsof -ti:${BOLTZ2_PORT}           | xargs kill -9 2>/dev/null || true
 
 # ── Docker tool services (optional — ESMFold / others) ───────────────────────
 if [ "${START_DOCKER_TOOLS:-0}" = "1" ]; then
@@ -90,6 +91,17 @@ echo "Starting AbMAP server (port ${ABMAP_PORT})..."
 cd "$REPO_DIR/tools/abmap"
 bash start.sh > /tmp/abmap.log 2>&1 &
 ABMAP_PID=$!
+
+# ── Boltz2 ───────────────────────────────────────────────────────────────────
+BOLTZ2_PID=""
+if [ -f "$REPO_DIR/tools/boltz2/.venv/bin/uvicorn" ]; then
+  echo "Starting Boltz2 server (port ${BOLTZ2_PORT})..."
+  cd "$REPO_DIR/tools/boltz2"
+  .venv/bin/uvicorn server:app --host 127.0.0.1 --port "${BOLTZ2_PORT}" > /tmp/boltz2.log 2>&1 &
+  BOLTZ2_PID=$!
+else
+  echo "Boltz2 venv not found — skipping (run: cd tools/boltz2 && python3.12 -m venv .venv && .venv/bin/pip install boltz uvicorn fastapi pydantic)"
+fi
 
 # ── Backend ───────────────────────────────────────────────────────────────────
 echo "Starting backend (port ${BACKEND_PORT})..."
@@ -130,17 +142,19 @@ printf "  AbMAP        http://%-22s %s\n" "localhost:${ABMAP_PORT} (internal)" "
 printf "  ProteinMPNN  http://%-22s %s\n" "localhost:${PROTEINMPNN_PORT} (internal)" "$([ $PROTEINMPNN_OK -eq 1 ] && echo '✓' || echo '✗ check /tmp/proteinmpnn.log')"
 printf "  ESMFold      http://%-22s %s\n" "localhost:${ESMFOLD_PORT} (internal)" "$([ $ESMFOLD_OK -eq 1 ] && echo '✓' || echo '✗ check /tmp/esmfold.log')"
 printf "  CHEAP Embed  http://%-22s %s\n" "localhost:${CHEAP_EMBEDDING_PORT} (internal)" "$([ $CHEAP_OK -eq 1 ] && echo '✓' || echo '✗ check /tmp/cheap_embedding.log')"
+BOLTZ2_OK=0; curl -sf "http://localhost:${BOLTZ2_PORT}/health" > /dev/null 2>&1 && BOLTZ2_OK=1
+printf "  Boltz2       http://%-22s %s\n" "localhost:${BOLTZ2_PORT} (internal)" "$([ $BOLTZ2_OK -eq 1 ] && echo '✓' || ([ -n "$BOLTZ2_PID" ] && echo '✗ check /tmp/boltz2.log' || echo '— not installed (see tools/boltz2/SETUP.md)'))"
 echo "═══════════════════════════════════════════════════"
 echo ""
 echo "  Open from this machine:    http://localhost:${FRONTEND_PORT}"
 echo "  Open from other machines:  http://${HOST_IP}:${FRONTEND_PORT}"
 echo ""
-echo "PIDs: backend=$BACKEND_PID  frontend=$FRONTEND_PID  abmap=$ABMAP_PID  proteinmpnn=$PROTEINMPNN_PID  esmfold=$ESMFOLD_PID  cheap=$CHEAP_PID"
-echo "Logs: /tmp/backend.log  /tmp/frontend.log  /tmp/abmap.log  /tmp/proteinmpnn.log  /tmp/esmfold.log  /tmp/cheap_embedding.log"
+echo "PIDs: backend=$BACKEND_PID  frontend=$FRONTEND_PID  abmap=$ABMAP_PID  proteinmpnn=$PROTEINMPNN_PID  esmfold=$ESMFOLD_PID  cheap=$CHEAP_PID  boltz2=${BOLTZ2_PID:-n/a}"
+echo "Logs: /tmp/backend.log  /tmp/frontend.log  /tmp/abmap.log  /tmp/proteinmpnn.log  /tmp/esmfold.log  /tmp/cheap_embedding.log  /tmp/boltz2.log"
 echo ""
 echo "Press Ctrl+C to stop all servers."
 
 # ── Keep script alive; kill children on exit ──────────────────────────────────
-trap "echo ''; echo 'Stopping...'; kill $BACKEND_PID $FRONTEND_PID $ABMAP_PID $PROTEINMPNN_PID $ESMFOLD_PID $CHEAP_PID 2>/dev/null; exit 0" INT TERM
+trap "echo ''; echo 'Stopping...'; kill $BACKEND_PID $FRONTEND_PID $ABMAP_PID $PROTEINMPNN_PID $ESMFOLD_PID $CHEAP_PID ${BOLTZ2_PID} 2>/dev/null; exit 0" INT TERM
 
 wait

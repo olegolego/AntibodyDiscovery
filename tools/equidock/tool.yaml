@@ -2,7 +2,7 @@ id: equidock
 name: EquiDock
 version: "1.0.0"
 category: docking
-wip: true
+wip: false
 description: >
   Rigid protein-protein docking with an SE(3)-equivariant neural network (ICLR 2022).
   Takes two PDB structures — ligand (antibody) and receptor (antigen) — and predicts

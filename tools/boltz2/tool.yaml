@@ -1,0 +1,57 @@
+id: boltz2
+name: Boltz2
+version: "2.0"
+category: structure_prediction
+description: >
+  Structure prediction and binding affinity estimation for protein-ligand complexes.
+  Cofolds proteins with small molecules, DNA, RNA, or multiple chains.
+  Returns predicted structure, binding probability (0-1), and binding affinity (µM).
+  Paper: Passaro et al. 2025 (https://doi.org/10.1101/2025.06.14.659707).
+  Requires a Boltz2 server — see tools/boltz2/SETUP.md.
+
+inputs:
+  - name: sequence
+    type: fasta
+    required: false
+    default: "MAQQSPYSAAMAEEVRQELRQFFTQRIAELQEQNRAAQERVQNLQSQIDDLQQQLDQ"
+    description: Heavy chain (VH) or single protein sequence. Added as chain H.
+  - name: light_chain
+    type: fasta
+    required: false
+    default: "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+    description: Light chain (VL) sequence. If provided, added as chain L alongside chain H.
+  - name: structure
+    type: pdb
+    required: false
+    default: ""
+    description: Input PDB structure (alternative to sequence — used in iterative pipelines)
+  - name: ligand_smiles
+    type: str
+    required: false
+    default: ""
+    description: Ligand SMILES string for protein-ligand cofold (optional)
+  - name: ligand_name
+    type: str
+    required: false
+    default: "LIG"
+    description: Residue name for the ligand in the output PDB
+
+outputs:
+  - name: structure
+    type: pdb
+    description: Predicted 3D structure in PDB format (includes ligand if SMILES provided)
+  - name: binding_probability
+    type: json
+    description: Binding probability (0-1, unitless classification score). Higher = better.
+  - name: binding_affinity
+    type: json
+    description: Predicted binding affinity in µM (regression). Lower = tighter binding.
+  - name: plddt
+    type: json
+    description: Per-residue pLDDT confidence scores
+
+runtime:
+  kind: http
+  endpoint_env: BOLTZ2_URL
+  gpu: true
+  timeout_seconds: 3600

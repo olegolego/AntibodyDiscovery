@@ -14,6 +14,7 @@ import { ResultsPage } from "./results/ResultsPage";
 import { DatasetPage } from "./datasets/DatasetPage";
 import { TerminalPage } from "./terminal/TerminalPage";
 import { DNNDesignerPage } from "./dnn_designer/DNNDesignerPage";
+import { RLDesignerPage } from "./rl_designer/RLDesignerPage";
 import { submitRun } from "./api/runs";
 import { getLoopRun, type LoopRun } from "./api/loopRuns";
 import { useCanvasStore } from "./canvas/store";
@@ -21,6 +22,7 @@ import { useTools } from "./api/tools";
 import { randomUUID } from "./utils";
 import type { Pipeline, Run } from "./types";
 import type { ArchitectureSpec } from "./dnn_designer/store";
+import type { RLSpec } from "./rl_designer/store";
 import type { DNNContext } from "./canvas/ParamPanel";
 
 const RUN_KEY = "pdp_last_run_id";
@@ -43,10 +45,14 @@ export default function App() {
   const [loopRunning, setLoopRunning] = useState(false);
   const [loopData, setLoopData] = useState<LoopRun | null>(null);
   const [analysis, setAnalysis] = useState<{ runId: string; nodeId: string } | null>(null);
-  const [page, setPage] = useState<"canvas" | "playground" | "workshop" | "results" | "library" | "terminal" | "runs" | "report" | "dnn_designer" | "ml_analysis">("canvas");
+  const [page, setPage] = useState<"canvas" | "playground" | "workshop" | "results" | "library" | "terminal" | "runs" | "report" | "dnn_designer" | "ml_analysis" | "rl_designer">("canvas");
   const [dnnDesignerNodeId, setDnnDesignerNodeId] = useState<string | null>(null);
   const [dnnDesignerSpec, setDnnDesignerSpec] = useState<ArchitectureSpec | null>(null);
   const [dnnDesignerContext, setDnnDesignerContext] = useState<DNNContext | null>(null);
+  const [rlDesignerNodeId, setRLDesignerNodeId] = useState<string | null>(null);
+  const [rlDesignerSpec, setRLDesignerSpec] = useState<RLSpec | null>(null);
+  // Callback for when DNN designer is opened from within RL designer (policy network)
+  const [rlDNNSaveCallback, setRLDNNSaveCallback] = useState<((arch: ArchitectureSpec) => void) | null>(null);
   const [reportRunId, setReportRunId] = useState<string | null>(null);
 
   const toPipeline = useCanvasStore((s) => s.toPipeline);
@@ -174,17 +180,61 @@ export default function App() {
         nodeId={dnnDesignerNodeId}
         initialSpec={dnnDesignerSpec}
         context={dnnDesignerContext ?? undefined}
-        onBack={() => setPage("canvas")}
+        onBack={() => {
+          // If opened from RL designer, go back there instead of canvas
+          if (rlDNNSaveCallback) {
+            setRLDNNSaveCallback(null);
+            setPage("rl_designer");
+          } else {
+            setPage("canvas");
+          }
+        }}
         onSave={(nId, spec) => {
-          updateNodeParams(nId, {
-            ...(nodes.find((n) => n.id === nId)?.data as { params: Record<string, unknown> })?.params ?? {},
-            architecture_spec: spec,
-          });
-          setPage("canvas");
+          if (rlDNNSaveCallback) {
+            // Save the policy network into RL store and go back to rl_designer
+            rlDNNSaveCallback(spec);
+            setRLDNNSaveCallback(null);
+            setPage("rl_designer");
+          } else {
+            updateNodeParams(nId, {
+              ...(nodes.find((n) => n.id === nId)?.data as { params: Record<string, unknown> })?.params ?? {},
+              architecture_spec: spec,
+            });
+            setPage("canvas");
+          }
         }}
       />
     );
   }
+
+  if (page === "rl_designer" && rlDesignerNodeId) {
+    return (
+      <RLDesignerPage
+        nodeId={rlDesignerNodeId}
+        initialSpec={rlDesignerSpec}
+        onBack={() => setPage("canvas")}
+        onSave={(nId, spec) => {
+          updateNodeParams(nId, {
+            ...(nodes.find((n) => n.id === nId)?.data as { params: Record<string, unknown> })?.params ?? {},
+            rl_spec: spec,
+          });
+          setPage("canvas");
+        }}
+        onOpenDNNDesigner={(archSpec, saveCallback) => {
+          setDnnDesignerNodeId(rlDesignerNodeId);
+          setDnnDesignerSpec(archSpec);
+          setDnnDesignerContext(null);
+          setRLDNNSaveCallback(() => saveCallback);
+          setPage("dnn_designer");
+        }}
+      />
+    );
+  }
+
+  // When returning from DNN designer that was opened from within RL designer,
+  // handle the save and go back to rl_designer page.
+  // (This is managed by the onSave callback in the dnn_designer branch above,
+  //  which uses rlDNNSaveCallback if present.)
 
   if (page === "runs") {
     return (
@@ -308,6 +358,11 @@ return (
               setDnnDesignerContext(ctx);
               setPage("dnn_designer");
             }}
+            onOpenRLDesigner={(nId, spec) => {
+              setRLDesignerNodeId(nId);
+              setRLDesignerSpec(spec);
+              setPage("rl_designer");
+            }}
           />
         )}
 
@@ -321,6 +376,7 @@ return (
               onClose={() => { setRunId(null); setLoopRunId(null); setLoopData(null); setLoopRunning(false); localStorage.removeItem(RUN_KEY); }}
               onOpenAnalysis={(rId, nId) => setAnalysis({ runId: rId, nodeId: nId })}
               onViewReport={(id) => { setReportRunId(id); setPage("report"); }}
+              onContinueLoop={() => setLoopRunning(true)}
             />
           </div>
         )}

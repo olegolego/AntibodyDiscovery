@@ -61,9 +61,17 @@ def parse_sequences(inputs: dict[str, Any]) -> list[dict[str, Any]]:
         return [{"vh": clean_seq(str(s)), "vl": None} for s in candidates if s]
 
     # --- Explicit chain fields ---
-    raw_vh = str(inputs.get("vh") or inputs.get("heavy_chain") or "").strip()
+    # vh/heavy_chain may arrive as a list (e.g. wired from cdr_mutator.heavy_chain_variants)
+    vh_raw = inputs.get("vh") or inputs.get("heavy_chain") or ""
+    if isinstance(vh_raw, list):
+        return [{"vh": clean_seq(str(s)), "vl": None} for s in vh_raw if s]
+    raw_vh = str(vh_raw).strip()
     raw_vl = str(inputs.get("vl") or inputs.get("light_chain") or "").strip()
-    raw_seq = str(inputs.get("sequence") or "").strip()
+    # sequence port may also arrive as a list (wired from e.g. cdr_mutator.heavy_chain_variants)
+    seq_raw = inputs.get("sequence") or ""
+    if isinstance(seq_raw, list):
+        return [{"vh": clean_seq(str(s)), "vl": None} for s in seq_raw if s]
+    raw_seq = str(seq_raw).strip()
 
     # Multi-FASTA heavy chain → batch of VH-only pairs
     if is_multi_fasta(raw_vh):

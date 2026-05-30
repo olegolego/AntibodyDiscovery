@@ -1,0 +1,48 @@
+id: fuse
+name: Fuse
+version: "1.0"
+category: sequence_design
+description: >
+  Creates fusion proteins by concatenating amino acid sequences with flexible linkers.
+  Generates all combinations of linker lengths between domains (combinatorial library).
+  Mirrors the Fuse tool from BioPipelines (Quargnali & Rivera-Fuentes 2026).
+
+inputs:
+  - name: sequences
+    type: json
+    required: true
+    default: '["VSKGEELFTG", "ADQLTEEQIA", "VSKGEELFTG"]'
+    description: JSON list of amino acid sequences to fuse (in order)
+  - name: linker
+    type: str
+    required: false
+    default: "GSG"
+    description: Linker sequence (e.g. GSG, GGGS, EAAAK). Used as the linker motif.
+  - name: linker_lengths
+    type: json
+    required: false
+    default: '["0-2", "0-2"]'
+    description: >
+      JSON list of length ranges for each junction between sequences.
+      Format: ["min-max", "min-max"] — one range per junction (len(sequences)-1 entries).
+      E.g. ["0-3", "0-3"] generates 0..3 repeats of the linker motif at each junction.
+  - name: name
+    type: str
+    required: false
+    default: "fusion"
+    description: Base name for generated fusion proteins
+
+outputs:
+  - name: fusions
+    type: json
+    description: >
+      List of fusion objects: [{id: str, sequence: str, linker_composition: [int, int, ...]}].
+      One entry per linker-length combination.
+  - name: n_fusions
+    type: json
+    description: Number of fusion variants generated
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 30

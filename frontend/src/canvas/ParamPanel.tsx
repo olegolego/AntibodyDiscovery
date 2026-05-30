@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Database, BrainCircuit, X, Layers, Eye, Zap } from "lucide-react";
+import { Database, BrainCircuit, X, Layers, Eye, Zap, FlaskConical } from "lucide-react";
 import { useCanvasStore, type NodeData } from "./store";
 import { ComputePanel, LoopEndPanel } from "./ComputePanel";
 import { listDatasets } from "@/api/datasets";
 import type { ArchitectureSpec } from "@/dnn_designer/store";
+import type { RLSpec } from "@/rl_designer/store";
 
 const TYPE_INPUT: Record<string, string> = {
   int: "number",
@@ -22,6 +23,10 @@ const CATEGORY_COLOR: Record<string, string> = {
   toolbox:              "#e879f9",
   compute:              "#818cf8",
   control_flow:         "#06b6d4",
+  bioinformatics:       "#2dd4bf",
+  design:               "#f472b6",
+  ml:                   "#a3e635",
+  loop:                 "#facc15",
   debug:                "#94a3b8",
 };
 
@@ -411,12 +416,13 @@ export interface DNNContext {
 
 interface ParamPanelProps {
   onOpenDNNDesigner?: (nodeId: string, spec: ArchitectureSpec | null, context: DNNContext) => void;
+  onOpenRLDesigner?: (nodeId: string, spec: RLSpec | null) => void;
 }
 
 // Params on the dataset tool that are rendered inside DatasetPicker
 const DATASET_MANAGED_PARAMS = new Set(["dataset_id", "vh_column", "vl_column", "label_column"]);
 
-export function ParamPanel({ onOpenDNNDesigner }: ParamPanelProps = {}) {
+export function ParamPanel({ onOpenDNNDesigner, onOpenRLDesigner }: ParamPanelProps = {}) {
   const { nodes, edges, selectedNodeId, selectNode, updateNodeParams, runNodeOutputs } = useCanvasStore();
   const [openOutput, setOpenOutput] = useState<{ name: string; type: string; value: unknown } | null>(null);
 
@@ -587,11 +593,49 @@ export function ParamPanel({ onOpenDNNDesigner }: ParamPanelProps = {}) {
             />
           )}
 
+          {/* ── RL Designer: Configure RL Policy button ─────────────────── */}
+          {tool.id === "rl_designer" && onOpenRLDesigner && (
+            <div className="flex flex-col gap-2">
+              <button
+                onClick={() => {
+                  const raw = params.rl_spec;
+                  const spec: RLSpec | null =
+                    raw && typeof raw === "object" && (raw as RLSpec).version === "1.0"
+                      ? (raw as RLSpec)
+                      : null;
+                  onOpenRLDesigner(node!.id, spec);
+                }}
+                className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg
+                  bg-violet-500/15 border border-violet-500/40 text-violet-300 text-xs
+                  font-semibold hover:bg-violet-500/25 transition-colors"
+              >
+                <FlaskConical size={13} />
+                Configure RL Policy →
+              </button>
+              {Boolean(params.rl_spec) && typeof params.rl_spec === "object" && (() => {
+                const spec = params.rl_spec as RLSpec;
+                const actionCount = (spec.action?.cdrs?.length ?? 0) *
+                                    (spec.action?.strategies?.length ?? 0) *
+                                    (spec.action?.n_mutations_choices?.length ?? 0);
+                return (
+                  <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-violet-950/30 border border-violet-900/40">
+                    <FlaskConical size={11} className="text-violet-400 shrink-0" />
+                    <span className="text-[10px] text-violet-300">
+                      {spec.algorithm?.kind?.toUpperCase() ?? "DQN"} · |A|={actionCount} ·{" "}
+                      ε {spec.algorithm?.epsilon_start}→{spec.algorithm?.epsilon_end}
+                    </span>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+
           {/* ── Generic parameter loop ──────────────────────────────────── */}
           {tool.inputs.filter((p) => {
             if (p.panel_hidden) return false;
             if (p.type === "pdb") return false;
             if (tool.id === "custom_dnn" && p.name === "architecture_spec") return false;
+            if (tool.id === "rl_designer" && p.name === "rl_spec") return false;
             if (tool.id === "dataset" && DATASET_MANAGED_PARAMS.has(p.name)) return false;
             if (tool.id === "developability_filter" && p.name === "check_config") return false;
             return true;
@@ -610,7 +654,9 @@ export function ParamPanel({ onOpenDNNDesigner }: ParamPanelProps = {}) {
                 </label>
 
                 {port.description && (
-                  <p className="text-[11px] text-slate-600 pl-3">{port.description}</p>
+                  <p className="text-[11px] text-slate-600 pl-3 max-h-16 overflow-y-auto leading-relaxed scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
+                    {port.description}
+                  </p>
                 )}
 
                 {port.type === "model" ? (

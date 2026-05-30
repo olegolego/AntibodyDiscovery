@@ -320,8 +320,18 @@ The tool runs as a separate process (locally or on a GPU instance). It must expo
 - If the tool uses torch ≤ 2.2, pin `numpy<2` — NumPy 2.x breaks the ABI
 - If the tool calls CLI binaries (e.g. `ANARCI`), the binary must be on PATH when starting the server: `PATH="/path/to/env/bin:$PATH" uvicorn server:app ...`
 - Set any required env vars (`ABMAP_HOME`, `MODEL_DIR`, etc.) before launching
-- Add the URL to `backend/.env`: `MYTOOL_URL=http://localhost:800X`
-- Add the config field to `backend/app/config.py`: `mytool_url: str = "http://localhost:800X"`
+
+**MANDATORY — Pattern C registration checklist (ALL four must be done together):**
+
+| Step | File | What to add |
+|------|------|-------------|
+| 1 | `backend/app/config.py` | `mytool_url: str = "http://localhost:800X"` |
+| 2 | `backend/.env` | `MYTOOL_URL=http://localhost:800X` |
+| 3 | `config.env` | `MYTOOL_PORT=800X` and `MYTOOL_URL=http://localhost:800X` |
+| 4 | `start.sh` | Export `MYTOOL_URL` in the URL export line; add status display line; add Boltz2-style optional health check if GPU-required |
+| 5 | `frontend/src/terminal/TerminalPage.tsx` | Add entry to `STATIC_ENDPOINTS` "External Tool Servers" section with port and `/health` path |
+
+Skipping any of these means the tool server URL won't be picked up when start.sh launches the backend, and the Terminal docs will be incomplete.
 
 **Starting the server** — document the exact command in `tools/<name>/SETUP.md`:
 ```bash
@@ -518,19 +528,80 @@ _ADAPTER_MAP = {
 }
 ```
 
-### `backend/app/core/executor.py` — if the tool has analysis outputs
+### `backend/app/core/executor.py` — if the tool outputs a PDB structure
 
+**Step 1 — add to `_ANALYSIS_TOOLS`:**
 ```python
-_ANALYSIS_TOOLS = {"alphafold_monomer", "esmfold", "immunebuilder", "haddock3", "my_tool"}
+_ANALYSIS_TOOLS = {"alphafold_monomer", "esmfold", "immunebuilder", "haddock3",
+                   "equidock", "equifold", "megadock", "superwater", "gromacs_mmpbsa",
+                   "my_tool"}
 ```
 
-Add the saving logic in `execute_run()`:
+**Step 2 — add an inline save block inside the per-node execution loop.**
+
+⚠️ **Critical: do NOT use `_save_analysis()` for structure tools.** That helper calls `_strip_for_generic_analysis()` which drops any string longer than 10 KB — silently destroying the PDB content. Use a direct `NodeAnalysisRow` insert instead:
+
 ```python
 elif node.tool == "my_tool":
     struct = outputs.get("structure")
-    if struct:
-        await _save_analysis(run.id, node_id, node.tool,
-                             {"structure": struct, "plddt": outputs.get("confidence")})
+    if struct and not str(struct).startswith("__"):   # skip slimmed sentinels
+        async with AsyncSessionLocal() as db:
+            db.add(NodeAnalysisRow(
+                run_id=run.id,
+                node_id=node_id,
+                tool_id=node.tool,
+                data=json.dumps({
+                    "structure": struct,
+                    "plddt": outputs.get("plddt"),
+                    "pae":   outputs.get("pae"),     # omit if not applicable
+                }),
+            ))
+            await db.commit()
+```
+
+**Step 3 — add to the post-run loop skip list.**
+
+The executor has a second analysis loop that runs after the parallel scheduler. At that point `node_run.outputs` is already slimmed (`structure = "__artifact__"`). If you do not skip your tool here, it writes a tiny garbage row that has a *later* timestamp — the analysis API (`ORDER BY created_at DESC LIMIT 1`) returns this stale row and the 3D viewer shows nothing.
+
+```python
+# ~line 484 in executor.py — post-run loop
+if node.tool in (
+    "haddock3", "equidock", "immunebuilder", "superwater",
+    "esmfold", "alphafold_monomer", "equifold",
+    "my_tool",   # ← add here
+):
+    pass  # inline block already wrote NodeAnalysisRow with real PDB — do not overwrite
+```
+
+**Special cases:**
+- **Multi-output structure tools** (ImmuneBuilder, which outputs `structure_1`…`structure_4`): write one `NodeAnalysisRow` per model, using `node_id=f"{node_id}_model_{i}"` so the analysis API can address each model independently.
+- **Docking tools** that store a complex PDB: store it under key `"structure"` in the JSON blob — `AnalysisPanel.tsx` and `get_node_analysis()` both read from that key.
+- **Metrics-only tools** (e.g. GROMACS MM/GBSA which stores ΔG bind but not a PDB): `_save_analysis()` is fine because there is no PDB to strip.
+
+### `backend/app/api/runs.py` — add metrics extractor
+
+The `/runs/{id}/report/` endpoint calls `_extract_metrics(tool_id, outputs)` to build the card shown in RunPanel. The `outputs` dict here is the **slimmed** version stored in the run row, so PDB strings are already replaced by `"__artifact__"`. Only extract small scalars (scores, counts, lengths):
+
+```python
+if tool_id == "my_tool":
+    meta = outputs.get("metadata") or {}
+    score = meta.get("best_score")
+    if score is not None:
+        conf = "high" if score <= -50 else ("medium" if score <= -20 else "low")
+        return M(
+            primary=_rv("Best score", round(score, 2)),
+            secondary=[_rv("Models", meta.get("num_models"))],
+            confidence=conf,
+        )
+    return M(confidence="neutral")
+```
+
+Also add your tool to `_TOOL_NAMES`:
+```python
+_TOOL_NAMES: dict[str, str] = {
+    ...
+    "my_tool": "My Tool",
+}
 ```
 
 ---
@@ -794,19 +865,25 @@ If there's no dedicated view for your tool, it falls through to `ModelContent`, 
 
 **Per-tool summary — what each tool stores and where:**
 
-| Tool | Key that triggers "Analyze" button | Saved in `executor.py` branch | Dedicated view |
-|---|---|---|---|
-| `immunebuilder` | `structure_1` | `{node_id}_model_{1..4}` node IDs | `ImmuneBuilderGrid` |
-| `esmfold` | `structure` or `plddt` | generic `elif "structure"…` | `ModelContent` (pLDDT chart) |
-| `alphafold_monomer` | `structure` or `plddt` | generic `elif "structure"…` | `ModelContent` (pLDDT + PAE) |
-| `haddock3` | `best_complex` | explicit branch, saves as `structure`+`plddt` | `HADDOCK3View` |
-| `equidock` | `best_complex` | explicit branch, saves as `structure`+`plddt` | `EquiDockView` |
-| `megadock` | `best_complex` or `top_scores` | **results_collector only** (executor must NOT double-save) | `MegaDockView` |
-| `superwater` | `hydrated_structure` | explicit branch, saves as `structure`+`water_count` | `SuperWaterView` |
-| `gromacs_mmpbsa` | `delta_g_bind` | explicit branch, saves custom keys | `GROMACSView` |
+| Tool | Key that triggers "Analyze" button | How NodeAnalysisRow is saved | Post-run loop | Dedicated view |
+|---|---|---|---|---|
+| `immunebuilder` | `structure_1` | Inline: one row per model, `node_id="{id}_model_{i}"` | `pass` (skip) | `ImmuneBuilderGrid` |
+| `esmfold` | `structure` or `plddt` | Inline: direct insert, keys `structure`/`plddt`/`pae` | `pass` (skip) | `ModelContent` (pLDDT chart) |
+| `alphafold_monomer` | `structure` or `plddt` | Inline: direct insert, keys `structure`/`plddt`/`pae` | `pass` (skip) | `ModelContent` (pLDDT + PAE) |
+| `equifold` | `structure` | Inline: direct insert, keys `structure`/`plddt`/`pae` | `pass` (skip) | `ModelContent` (structure viewer) |
+| `haddock3` | `best_complex` | Inline: direct insert, keys `structure`+`plddt` (scores dict) | `pass` (skip) | `HADDOCK3View` |
+| `equidock` | `best_complex` | Inline: direct insert, keys `structure`+`plddt` (metadata) | `pass` (skip) | `EquiDockView` |
+| `megadock` | `best_complex` or `top_scores` | `results_collector._collect_megadock_analysis` only | `pass` (skip) | `MegaDockView` |
+| `superwater` | `hydrated_structure` | Inline: direct insert, keys `structure`+`water_count` | `pass` (skip) | `SuperWaterView` |
+| `gromacs_mmpbsa` | `delta_g_bind` | Post-run loop: `_save_analysis()` (metrics-only, no PDB) | writes metrics | `GROMACSView` |
 
-**Common mistake — megadock double-save:**
-`results_collector._collect_megadock_analysis` saves a comprehensive row (top_scores, complex_pdbs, etc.). Do NOT also call `_save_analysis` in `executor.py` for megadock — it would overwrite with a stripped version and the `MegaDockView` would lose its data.
+**Why the post-run loop must skip structure tools:**
+
+The executor has two analysis-save sites:
+1. **Inline** (inside `_execute_single_node`): runs with the real, un-slimmed outputs right after the tool finishes — PDB content is intact.
+2. **Post-run loop** (~line 472 in executor.py): runs after the parallel scheduler. By then `node_run.outputs` has been through `_slim_outputs()`, which replaces strings > 512 chars with `"__artifact__"`. If this loop also calls `_save_analysis()` for a structure tool, it writes a row with `"structure": "__artifact__"` (12 bytes) at a *later* `created_at` than the good inline row. The analysis API (`ORDER BY created_at DESC LIMIT 1`) returns this stale row — the 3D viewer shows "No structure available."
+
+Fix: add the tool to the skip list in the post-run loop so only the inline row survives.
 
 ---
 
@@ -927,7 +1004,61 @@ Any tool using `torch < 2.2` will fail with cryptic import errors (`ImportError:
 
 ---
 
-## 13. Shipping checklist
+## 13. Testing
+
+### Test scripts
+
+Two scripts cover the full tool suite. Run them after every significant change:
+
+```bash
+cd AntibodyDiscovery
+
+# Structure prediction + docking tools — verifies NodeAnalysisRow has real PDB, not sentinel
+python3 scripts/test_structure_tools.py
+
+# All other locally runnable tools — grouped by category
+python3 scripts/test_all_tools.py           # all groups
+python3 scripts/test_all_tools.py inputs    # echo, sequence_input, target_input, dataset, compute
+python3 scripts/test_all_tools.py sequence  # ablang, esm_embedding, biophi, deepsp, netsolp, liability_scanner
+python3 scripts/test_all_tools.py design    # cdr_mutator, progen2, iglm
+python3 scripts/test_all_tools.py pipeline  # developability_filter, rank, filter, evaluate, choose
+python3 scripts/test_all_tools.py structure # pdbfixer, superwater
+python3 scripts/test_all_tools.py slow      # megadock (~10 min)
+```
+
+**Tools skipped by these scripts** (need external server or are too slow for routine testing):
+- `esmfold`, `abmap`, `cheap_embedding`, `proteinmpnn` — require HTTP server
+- `haddock3` — 7200s timeout
+- `rfdiffusion` — 30+ min
+- `gromacs_mmpbsa` — needs MD infrastructure
+- `dnn_mlde`, `rcc_mlde` — need a dataset with embeddings
+- `loop` / `loop_start` / `loop_end` — tested via loop pipeline integration tests
+
+### Adding a test for a new tool
+
+Add a `test_<tool_id>()` function to `scripts/test_all_tools.py` following the existing pattern:
+1. Build the minimal pipeline nodes and edges
+2. Call `run_test(name, nodes, edges, timeout)` — returns `(passed, run)` 
+3. Print a key output value to confirm it's meaningful (not just "succeeded")
+4. For structure tools: also verify the `NodeAnalysisRow` contains a real PDB (not `"__artifact__"`) using `check_analysis_rows(run_id)`
+5. Assign `RESULTS["tool_id"] = passed`
+6. Add it to the right group in `__main__`
+
+### What the analysis API test looks like (structure tools only)
+
+```bash
+# After a successful run, verify the analysis endpoint returns real PDB:
+RUN_ID="<run_id>"
+NODE_ID="<node_id>"
+curl -s http://localhost:8000/api/analysis/runs/$RUN_ID/nodes/$NODE_ID/ | \
+  python3 -c "import json,sys; d=json.load(sys.stdin); s=d.get('structure',''); print(f'struct={len(s)} chars, is_real={not s.startswith(\"__\")}')"
+```
+
+Expected: `struct=141861 chars, is_real=True`. If you see `struct=12 chars` it means `"__artifact__"` — the post-run loop overwrote the good inline row (see § 11 two-save bug).
+
+---
+
+## 14. Shipping checklist
 
 ```
 [ ] tool.yaml has working defaults (drag-drop → Run works immediately)
@@ -939,13 +1070,17 @@ Any tool using `torch < 2.2` will fail with cryptic import errors (`ImportError:
 [ ] Pattern B: run_id=run_ctx.run_id passed to run_tool_subprocess
 [ ] Multi-output tools pad unused slots with None
 [ ] Adapter registered in tasks.py _ADAPTER_MAP
-[ ] Analysis saving added to executor.py if tool outputs structure/confidence
+[ ] Structure tools: NodeAnalysisRow saved via direct AsyncSessionLocal insert (NOT _save_analysis)
+[ ] Structure tools: added to _ANALYSIS_TOOLS set in executor.py
+[ ] Structure tools: added to post-run loop skip list in executor.py
+[ ] Metrics extractor added to _extract_metrics() in runs.py
+[ ] Tool name added to _TOOL_NAMES in runs.py
 [ ] Tool outputs registered in results_collector.py
 [ ] Important scalar outputs registered in tool_features.py (see § 7.5)
-[ ] hasAnalysis check updated in RunPanel.tsx
+[ ] hasAnalysis check updated in RunPanel.tsx (add key output name)
 [ ] Paper added to playground/papers.ts
-[ ] Test: drag node with no connections → Run → succeeds with defaults
-[ ] Test: connect sequence_input → new_tool → Run → succeeds
+[ ] Test: python3 scripts/test_all_tools.py → new tool passes
+[ ] Test for structure tools: analysis API returns real PDB (not __artifact__ sentinel)
 [ ] Test: run twice with same inputs → second run logs "Cache hit" and returns instantly
 [ ] TypeScript compiles: cd frontend && npx tsc --noEmit
 [ ] Backend starts cleanly: backend/.venv/bin/uvicorn app.main:app --reload

@@ -14,9 +14,12 @@ class ESMFoldAdapter:
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
         raw = inputs.get("sequence") or inputs.get("heavy_chain") or inputs.get("light_chain") or ""
-        # ProteinMPNN outputs a list — take the best (first) sequence
+        # ProteinMPNN outputs a list of strings; Fuse outputs a list of {id, sequence, ...}
         if isinstance(raw, list):
             raw = raw[0] if raw else ""
+        # Fuse fusion objects: extract the amino-acid sequence field
+        if isinstance(raw, dict):
+            raw = raw.get("sequence", raw.get("seq", "")) or ""
         sequence: str = str(raw).strip()
         if not sequence:
             raise ValueError("ESMFold requires a sequence input (sequence, heavy_chain, or light_chain)")

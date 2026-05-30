@@ -1,0 +1,130 @@
+id: rl_designer
+name: RL Policy Trainer
+version: "1.0"
+category: ml
+description: >
+  Deep Q-Network (DQN) policy for informed CDR mutation selection.
+  State = protein embedding (AbMAP / ESM-2 / AbLang / CHEAP).
+  Action = (CDR region, mutation strategy, n_mutations) — a discrete triple that
+  parameterises the CDR Mutator for the next design round.
+  Reward = weighted combination of evaluation scores (docking, pLDDT, solubility, etc.).
+
+  On the first loop iteration the policy explores randomly (ε=1). In subsequent
+  iterations it trains on the experience buffer accumulated via policy_state and
+  decays ε toward exploitation. Outputs recommended_actions to wire directly into
+  cdr_mutator params, plus rich viz_data consumed by the RL Designer frontend.
+
+inputs:
+  # ── RL configuration (from designer canvas) ──────────────────────────────────
+  - name: rl_spec
+    type: json
+    required: true
+    description: >
+      RLSpec JSON produced by the RL Designer canvas. Defines algorithm,
+      state config, action space, reward config, policy network architecture,
+      and training hyperparameters.
+
+  # ── State: protein embeddings ─────────────────────────────────────────────────
+  - name: state_embeddings
+    type: json
+    required: true
+    description: >
+      {seq_id: [float, ...]} — current-round embeddings for all candidate
+      sequences. Compatible with AbMAP (252d), ESM-2 (320–1280d), AbLang (768d),
+      CHEAP (4–1024d). Passed directly from the upstream embedding tool output.
+
+  # ── Reward signals (from evaluation tools) ───────────────────────────────────
+  - name: reward_signals
+    type: json
+    required: false
+    default: null
+    description: >
+      {port_name: {seq_id: float}} — scored outputs from evaluation tools to use
+      as the RL reward signal. Example: {"haddock_score": {"seq_0": -42.5, ...}}.
+      Null on the first iteration (no reward available yet).
+
+  # ── Accumulated policy state (from prior loop iteration) ─────────────────────
+  - name: policy_state
+    type: json
+    required: false
+    default: null
+    description: >
+      Serialised Q-network weights + replay buffer + epsilon from the previous
+      loop iteration. Injected automatically by the loop executor — do not wire
+      manually. Null on the first iteration (fresh initialisation).
+
+  # ── Control params ────────────────────────────────────────────────────────────
+  - name: mode
+    type: str
+    required: false
+    default: "train_and_act"
+    options:
+      - "train_and_act"
+      - "act"
+      - "train"
+    description: >
+      train_and_act: train on buffered experience then select actions (default).
+      act: forward pass only — no gradient updates.
+      train: gradient updates only — no new action selection.
+
+  - name: top_k
+    type: int
+    required: false
+    default: 4
+    description: >
+      Number of (seq_id, action) pairs to return in recommended_actions, sorted
+      by Q-value descending.
+
+outputs:
+  # ── Recommended actions (wire to cdr_mutator) ────────────────────────────────
+  - name: recommended_actions
+    type: json
+    description: >
+      [{seq_id, cdr, strategy, n_mutations, q_value, exploratory}, ...]
+      sorted by Q-value descending. Top entry also surfaced as convenience
+      scalars (top_cdr, top_strategy, top_n_mutations) for direct wiring.
+
+  - name: top_cdr
+    type: str
+    description: "CDR region for the highest-Q action, e.g. 'CDR_H3'."
+
+  - name: top_strategy
+    type: str
+    description: "Mutation strategy for the top action, e.g. 'blosum62'."
+
+  - name: top_n_mutations
+    type: int
+    description: "Number of mutations for the top action."
+
+  # ── Full Q-table ─────────────────────────────────────────────────────────────
+  - name: q_values
+    type: json
+    description: >
+      {seq_id: {action_idx: float}} — Q(s,a) for every (sequence, action) pair.
+      Used by the frontend Q-heatmap visualisation.
+
+  # ── Updated policy state (for next loop iteration) ───────────────────────────
+  - name: policy_state
+    type: json
+    description: >
+      Updated serialised Q-net weights + replay buffer + epsilon + visit counts.
+      Passed to the next iteration by the loop executor.
+
+  # ── Training metrics ─────────────────────────────────────────────────────────
+  - name: metrics
+    type: json
+    description: >
+      {epsilon, buffer_size, mean_loss, mean_td_error, mean_reward, n_train_steps}
+      Surfaces key training diagnostics for the Results DB and the RL dashboard.
+
+  # ── Visualisation data (consumed by frontend dashboard) ──────────────────────
+  - name: viz_data
+    type: json
+    description: >
+      {q_heatmap, tsne_coords, visit_counts, episode_rewards, policy_arrows}
+      Pre-computed structures fed directly to the five dashboard panels.
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 600

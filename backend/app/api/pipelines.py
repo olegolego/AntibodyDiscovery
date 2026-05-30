@@ -88,7 +88,6 @@ Return ONLY a raw JSON object — no markdown fences, no explanation, no trailin
 - superwater           | structure(pdb)            → structure(pdb)
 - gromacs              | structure(pdb)            → trajectory, scores(json)
 - gromacs_mmpbsa       | complex(pdb)              → scores(json)
-- property_predictor   | heavy_chain, light_chain → scores(json)
 
 ### Loop control (for iterative active-learning pipelines)
 - loop_start | heavy_chain(fasta), light_chain(fasta), max_iterations(int,default=5) → heavy_chain, light_chain

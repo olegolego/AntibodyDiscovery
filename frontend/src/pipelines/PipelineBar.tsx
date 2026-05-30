@@ -96,6 +96,8 @@ export function PipelineBar({
     }
   }
 
+  const btn = "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium text-slate-400 hover:text-white hover:bg-white/5 border border-border hover:border-slate-500 transition-all duration-150";
+
   return (
     <div className="h-12 border-b border-border bg-surface flex items-center px-4 gap-3 relative z-10 shrink-0"
       style={{ background: "linear-gradient(90deg, #0e1425 0%, #111830 100%)" }}
@@ -128,36 +130,20 @@ export function PipelineBar({
       )}
 
       {/* Pipeline Generator */}
-      <button
-        onClick={() => setShowAI(true)}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium
-          text-violet-300 hover:text-white border border-violet-500/30 hover:border-violet-400/60
-          hover:bg-violet-500/10 transition-all duration-150"
-        style={{ boxShadow: "0 0 10px rgba(139,92,246,0.15)" }}
-      >
+      <button onClick={() => setShowAI(true)} className={btn}>
         <Sparkles size={13} />
         <span>Pipeline Generator</span>
       </button>
 
       {/* New */}
-      <button
-        onClick={handleNew}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-slate-400
-          hover:text-white hover:bg-white/5 border border-border hover:border-slate-500
-          transition-all duration-150"
-      >
+      <button onClick={handleNew} className={btn}>
         <FilePlus size={13} />
         <span>New</span>
       </button>
 
       {/* Load */}
       <div className="relative">
-        <button
-          onClick={() => setShowLoad((v) => !v)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-slate-400
-            hover:text-white hover:bg-white/5 border border-border hover:border-slate-500
-            transition-all duration-150"
-        >
+        <button onClick={() => setShowLoad((v) => !v)} className={btn}>
           <FolderOpen size={13} />
           <span>Load</span>
           <ChevronDown size={11} />
@@ -213,90 +199,49 @@ export function PipelineBar({
       </div>
 
       {/* Save */}
-      <button
-        onClick={handleSave}
-        disabled={saving}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-slate-400
-          hover:text-white hover:bg-white/5 border border-border hover:border-slate-500
-          transition-all duration-150 disabled:opacity-40"
-      >
+      <button onClick={handleSave} disabled={saving} className={`${btn} disabled:opacity-40`}>
         <Save size={13} />
         <span>{saving ? "Saving…" : "Save"}</span>
       </button>
 
       {/* Terminal */}
-      <button
-        onClick={onOpenTerminal}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-          text-slate-400 hover:text-white border border-transparent
-          hover:border-violet-500/40 hover:bg-violet-500/10 transition-all"
-      >
+      <button onClick={onOpenTerminal} className={btn}>
         <Terminal size={13} />
         <span>Terminal</span>
       </button>
 
       {/* Datasets */}
-      <button
-        onClick={onOpenLibrary}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-          text-slate-400 hover:text-white border border-transparent
-          hover:border-amber-500/40 hover:bg-amber-500/10 transition-all"
-      >
+      <button onClick={onOpenLibrary} className={btn}>
         <BookOpen size={13} />
         <span>Datasets</span>
       </button>
 
       {/* Playground */}
-      <button
-        onClick={onOpenPlayground}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-slate-400
-          hover:text-white hover:bg-white/5 border border-border hover:border-slate-500
-          transition-all duration-150"
-      >
+      <button onClick={onOpenPlayground} className={btn}>
         <FlaskConical size={13} />
         <span>Tool Understanding</span>
       </button>
 
       {/* Workshop */}
-      <button
-        onClick={onOpenWorkshop}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-slate-400
-          hover:text-white hover:bg-white/5 border border-border hover:border-slate-500
-          transition-all duration-150"
-      >
+      <button onClick={onOpenWorkshop} className={btn}>
         <Wrench size={13} />
         <span>Workshop</span>
       </button>
 
       {/* Run History */}
-      <button
-        onClick={onOpenRuns}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-          text-slate-400 hover:text-white border border-transparent
-          hover:border-sky-500/40 hover:bg-sky-500/10 transition-all"
-      >
+      <button onClick={onOpenRuns} className={btn}>
         <ClipboardList size={13} />
         <span>Runs</span>
       </button>
 
       {/* Results DB */}
-      <button
-        onClick={onOpenResults}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-          text-slate-400 hover:text-white border border-transparent
-          hover:border-indigo-500/40 hover:bg-indigo-500/10 transition-all"
-      >
+      <button onClick={onOpenResults} className={btn}>
         <Database size={13} />
         <span>Results</span>
       </button>
 
       {/* ML Analysis */}
-      <button
-        onClick={onOpenMLAnalysis}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
-          text-slate-400 hover:text-white border border-transparent
-          hover:border-violet-500/40 hover:bg-violet-500/10 transition-all"
-      >
+      <button onClick={onOpenMLAnalysis} className={btn}>
         <BarChart2 size={13} />
         <span>Analysis</span>
       </button>

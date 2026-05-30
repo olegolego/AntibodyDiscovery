@@ -1,4 +1,4 @@
-"""Stub adapter for toolbox (WIP) tools — custom DNN, diffusion designer, property predictor."""
+"""Stub adapter for toolbox (WIP) tools — diffusion designer."""
 from typing import Any
 
 from app.models.tool_spec import ToolSpec
@@ -12,10 +12,6 @@ _ROADMAP: dict[str, str] = {
     "diffusion_design": (
         "Diffusion Designer is coming soon. Planned: fine-tune or sample from "
         "RFdiffusion/FrameDiff/Chroma with custom noise schedules and motif constraints."
-    ),
-    "property_predictor": (
-        "Property Predictor is coming soon. Planned: ESM-2–backed predictors for "
-        "affinity, stability, developability, and immunogenicity."
     ),
 }
 

@@ -1,0 +1,52 @@
+id: ligand_mpnn
+name: LigandMPNN
+version: "1.0"
+category: sequence_design
+description: >
+  Ligand-aware inverse folding — designs protein sequences for a structure conditioned
+  on a small-molecule ligand in the binding pocket. Redesigns only specified pocket
+  residues while fixing the rest of the sequence.
+  Paper: Dauparas et al. 2025, Nat. Methods (https://doi.org/10.1038/s41592-024-02487-0).
+  Requires setup: bash tools/ligand_mpnn/setup.sh
+
+inputs:
+  - name: structure
+    type: pdb
+    required: true
+    default: ""
+    description: Protein structure with ligand present (from Boltz2 or other predictor)
+  - name: ligand
+    type: str
+    required: false
+    default: "LIG"
+    description: Residue name of the ligand in the PDB
+  - name: num_sequences
+    type: int
+    required: false
+    default: 10
+    description: Number of sequences to design
+  - name: redesigned
+    type: json
+    required: false
+    default: "[]"
+    description: >
+      List of residues to redesign: [{chain, resnum, resname}, ...] from DistanceSelector.
+      If empty, redesign the full protein.
+  - name: sampling_temp
+    type: float
+    required: false
+    default: 0.1
+    description: Sampling temperature (lower = more conservative)
+
+outputs:
+  - name: sequences
+    type: json
+    description: List of designed AA sequences (strings)
+  - name: scores
+    type: json
+    description: Per-sequence log-probability scores (lower = better)
+
+runtime:
+  kind: local_python
+  gpu: false
+  timeout_seconds: 600

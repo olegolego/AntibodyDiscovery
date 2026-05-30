@@ -347,3 +347,31 @@ register("equidock", [
         ),
     ),
 ])
+
+# RL Designer: metrics are nested under "metrics" key
+register("rl_designer", [
+    FeatureSpec(
+        "rl_epsilon", "RL Epsilon", "number",
+        lambda o: _safe_round((o.get("metrics") or {}).get("epsilon"), 4),
+    ),
+    FeatureSpec(
+        "rl_mean_reward", "RL Mean Reward", "number",
+        lambda o: _safe_round((o.get("metrics") or {}).get("mean_reward"), 4),
+    ),
+    FeatureSpec(
+        "rl_td_error", "RL TD Error", "number",
+        lambda o: _safe_round((o.get("metrics") or {}).get("mean_td_error"), 6),
+    ),
+    FeatureSpec(
+        "rl_buffer_size", "RL Buffer Size", "number",
+        lambda o: _safe((o.get("metrics") or {}).get("buffer_size")),
+    ),
+    FeatureSpec(
+        "rl_top_cdr", "RL Top CDR", "text",
+        lambda o: (o.get("recommended_actions") or [{}])[0].get("cdr"),
+    ),
+    FeatureSpec(
+        "rl_top_strategy", "RL Top Strategy", "text",
+        lambda o: (o.get("recommended_actions") or [{}])[0].get("strategy"),
+    ),
+])

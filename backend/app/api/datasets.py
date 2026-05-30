@@ -56,6 +56,73 @@ def _entry_dict(e: DatasetEntryRow) -> dict:
     }
 
 
+def _seq_key(vh: str | None, vl: str | None) -> tuple[str, str] | None:
+    """Normalised (VH, VL) key for dedup. Returns None when VH is absent."""
+    if not vh or not vh.strip():
+        return None
+    return (vh.strip().upper(), (vl or "").strip().upper())
+
+
+async def _upsert_entries(
+    db: AsyncSession,
+    ds_id: str,
+    entries: list[dict],
+) -> tuple[list[DatasetEntryRow], list[DatasetEntryRow]]:
+    """Insert or merge entries into a dataset keyed by (heavy_chain, light_chain).
+
+    Entries without a VH are always inserted fresh.
+    Returns (merged_rows, inserted_rows).
+    """
+    existing_rows = (await db.execute(
+        select(DatasetEntryRow).where(DatasetEntryRow.dataset_id == ds_id)
+    )).scalars().all()
+
+    index: dict[tuple[str, str], DatasetEntryRow] = {}
+    for row in existing_rows:
+        k = _seq_key(row.heavy_chain, row.light_chain)
+        if k is not None:
+            index[k] = row
+
+    merged: list[DatasetEntryRow] = []
+    inserted: list[DatasetEntryRow] = []
+
+    for ed in entries:
+        vh = ed.get("heavy_chain") or None
+        vl = ed.get("light_chain") or None
+        k = _seq_key(vh, vl)
+
+        if k is not None and k in index:
+            existing = index[k]
+            try:
+                existing_data = json.loads(existing.data or "{}")
+            except Exception:
+                existing_data = {}
+            existing_data.update(ed.get("data", {}))
+            existing.data = json.dumps(existing_data)
+            if not existing.name and ed.get("name"):
+                existing.name = ed["name"]
+            if not existing.source_molecule_id and ed.get("source_molecule_id"):
+                existing.source_molecule_id = ed["source_molecule_id"]
+            existing.updated_at = datetime.utcnow()
+            merged.append(existing)
+        else:
+            new_entry = DatasetEntryRow(
+                id=str(uuid.uuid4()),
+                dataset_id=ds_id,
+                name=ed.get("name") or None,
+                heavy_chain=vh,
+                light_chain=vl,
+                source_molecule_id=ed.get("source_molecule_id") or None,
+                data=json.dumps(ed.get("data", {})),
+            )
+            db.add(new_entry)
+            if k is not None:
+                index[k] = new_entry
+            inserted.append(new_entry)
+
+    return merged, inserted
+
+
 # ── Dataset CRUD ──────────────────────────────────────────────────────────────
 
 @router.get("/")
@@ -414,15 +481,18 @@ async def create_dataset_from_run(body: dict[str, Any], db: AsyncSession = Depen
         )
         db.add(ds)
 
-    for ed in raw_entries:
-        db.add(DatasetEntryRow(
-            id=str(uuid.uuid4()),
-            dataset_id=ds.id,
-            name=ed.get("name"),
-            heavy_chain=ed.get("heavy_chain"),
-            light_chain=ed.get("light_chain"),
-            data=json.dumps(ed.get("data", {})),
-        ))
+    if dataset_id:
+        await _upsert_entries(db, ds.id, raw_entries)
+    else:
+        for ed in raw_entries:
+            db.add(DatasetEntryRow(
+                id=str(uuid.uuid4()),
+                dataset_id=ds.id,
+                name=ed.get("name"),
+                heavy_chain=ed.get("heavy_chain"),
+                light_chain=ed.get("light_chain"),
+                data=json.dumps(ed.get("data", {})),
+            ))
 
     ds.updated_at = datetime.utcnow()
     await db.commit()
@@ -597,24 +667,12 @@ async def bulk_add_entries(
     if ds is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     rows_in: list[dict] = body.get("entries", [])
-    created = []
-    for r in rows_in:
-        entry = DatasetEntryRow(
-            id=str(uuid.uuid4()),
-            dataset_id=ds_id,
-            name=r.get("name") or None,
-            heavy_chain=r.get("heavy_chain") or None,
-            light_chain=r.get("light_chain") or None,
-            source_molecule_id=r.get("source_molecule_id") or None,
-            data=json.dumps(r.get("data", {})),
-        )
-        db.add(entry)
-        created.append(entry)
+    merged, inserted = await _upsert_entries(db, ds_id, rows_in)
     ds.updated_at = datetime.utcnow()
     await db.commit()
-    for e in created:
+    for e in inserted:
         await db.refresh(e)
-    return [_entry_dict(e) for e in created]
+    return [_entry_dict(e) for e in merged + inserted]
 
 
 # ── Import from Results DB ────────────────────────────────────────────────────
@@ -627,27 +685,24 @@ async def import_from_molecules(
     if ds is None:
         raise HTTPException(status_code=404, detail="Dataset not found")
     molecule_ids: list[str] = body.get("molecule_ids", [])
-    created = []
+    entries_in: list[dict] = []
     for mol_id in molecule_ids:
         mol = await db.get(MoleculeRow, mol_id)
         if mol is None:
             continue
-        entry = DatasetEntryRow(
-            id=str(uuid.uuid4()),
-            dataset_id=ds_id,
-            name=mol.name,
-            heavy_chain=mol.heavy_chain or None,
-            light_chain=mol.light_chain or None,
-            source_molecule_id=mol.id,
-            data="{}",
-        )
-        db.add(entry)
-        created.append(entry)
+        entries_in.append({
+            "name": mol.name,
+            "heavy_chain": mol.heavy_chain or None,
+            "light_chain": mol.light_chain or None,
+            "source_molecule_id": mol.id,
+            "data": {},
+        })
+    merged, inserted = await _upsert_entries(db, ds_id, entries_in)
     ds.updated_at = datetime.utcnow()
     await db.commit()
-    for e in created:
+    for e in inserted:
         await db.refresh(e)
-    return [_entry_dict(e) for e in created]
+    return [_entry_dict(e) for e in merged + inserted]
 
 
 # ── CSV export ────────────────────────────────────────────────────────────────

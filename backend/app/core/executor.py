@@ -41,7 +41,7 @@ from app.tools.registry import _SENTINEL_PREFIX
 from app.tools.subprocess_runner import kill_subprocess
 from app.workers.tasks import dispatch_tool
 
-_ANALYSIS_TOOLS = {"alphafold_monomer", "esmfold", "immunebuilder", "haddock3", "equidock", "equifold", "megadock", "gromacs_mmpbsa", "superwater"}
+_ANALYSIS_TOOLS = {"alphafold_monomer", "esmfold", "immunebuilder", "haddock3", "equidock", "equifold", "megadock", "gromacs_mmpbsa", "superwater", "boltz2"}
 _LOOP_END_TOOLS = {"loop", "loop_end"}    # trigger iteration continuation
 _LOOP_START_TOOLS = {"loop_start"}         # mark the loop entry point
 # Tools whose failure is non-fatal: they don't block downstream nodes and don't
@@ -350,24 +350,41 @@ async def execute_run(run_id: str) -> None:
                     struct = outputs.get("best_complex")
                     scores = outputs.get("scores") or {}
                     if struct:
-                        await _save_analysis(run.id, node_id, node.tool,
-                                             {"structure": struct, "plddt": scores})
+                        async with AsyncSessionLocal() as db:
+                            db.add(NodeAnalysisRow(
+                                run_id=run.id, node_id=node_id, tool_id="haddock3",
+                                data=json.dumps({"structure": struct, "plddt": scores}),
+                            ))
+                            await db.commit()
                 elif node.tool == "equidock":
                     struct = outputs.get("best_complex")
                     meta = outputs.get("metadata") or {}
                     if struct:
-                        await _save_analysis(run.id, node_id, node.tool,
-                                             {"structure": struct, "plddt": meta})
+                        # Save raw — PDB must not be stripped so the 3D viewer works.
+                        async with AsyncSessionLocal() as db:
+                            db.add(NodeAnalysisRow(
+                                run_id=run.id, node_id=node_id, tool_id="equidock",
+                                data=json.dumps({"structure": struct, "plddt": meta}),
+                            ))
+                            await db.commit()
                 elif node.tool == "immunebuilder":
-                    error_estimates = outputs.get("error_estimates") or []
+                    raw_errs = outputs.get("error_estimates") or []
+                    error_estimates = raw_errs if isinstance(raw_errs, list) else []
                     for i in range(1, 5):
                         struct = outputs.get(f"structure_{i}")
-                        if struct:
-                            await _save_analysis(
-                                run.id, f"{node_id}_model_{i}", node.tool,
-                                {"structure": struct, "plddt": {"model_index": i,
-                                                                "per_residue_rmsd": error_estimates}},
-                            )
+                        if struct and not str(struct).startswith("__"):
+                            async with AsyncSessionLocal() as db:
+                                db.add(NodeAnalysisRow(
+                                    run_id=run.id,
+                                    node_id=f"{node_id}_model_{i}",
+                                    tool_id="immunebuilder",
+                                    data=json.dumps({
+                                        "structure": struct,
+                                        "plddt": {"model_index": i,
+                                                  "per_residue_rmsd": error_estimates},
+                                    }),
+                                ))
+                                await db.commit()
                 elif node.tool == "gromacs_mmpbsa":
                     dg = outputs.get("delta_g_bind")
                     if dg is not None:
@@ -379,10 +396,40 @@ async def execute_run(run_id: str) -> None:
                 elif node.tool == "superwater":
                     struct = outputs.get("hydrated_structure")
                     water_count = outputs.get("water_count") or {}
-                    if struct:
-                        await _save_analysis(run.id, node_id, node.tool, {
-                            "structure": struct, "water_count": water_count,
-                        })
+                    if struct and not str(struct).startswith("__"):
+                        async with AsyncSessionLocal() as db:
+                            db.add(NodeAnalysisRow(
+                                run_id=run.id, node_id=node_id, tool_id="superwater",
+                                data=json.dumps({"structure": struct, "water_count": water_count}),
+                            ))
+                            await db.commit()
+                elif node.tool in ("esmfold", "alphafold_monomer", "equifold"):
+                    struct = outputs.get("structure")
+                    if struct and not str(struct).startswith("__"):
+                        async with AsyncSessionLocal() as db:
+                            db.add(NodeAnalysisRow(
+                                run_id=run.id, node_id=node_id, tool_id=node.tool,
+                                data=json.dumps({
+                                    "structure": struct,
+                                    "plddt":     outputs.get("plddt"),
+                                    "pae":       outputs.get("pae"),
+                                }),
+                            ))
+                            await db.commit()
+                elif node.tool == "boltz2":
+                    struct = outputs.get("structure")
+                    if struct and not str(struct).startswith("__"):
+                        async with AsyncSessionLocal() as db:
+                            db.add(NodeAnalysisRow(
+                                run_id=run.id, node_id=node_id, tool_id="boltz2",
+                                data=json.dumps({
+                                    "structure":          struct,
+                                    "plddt":              outputs.get("plddt"),
+                                    "binding_probability": outputs.get("binding_probability"),
+                                    "binding_affinity":   outputs.get("binding_affinity"),
+                                }),
+                            ))
+                            await db.commit()
                 elif "structure" in outputs or "plddt" in outputs:
                     await _save_analysis(run.id, node_id, node.tool, outputs)
             except Exception:
@@ -445,35 +492,16 @@ async def execute_run(run_id: str) -> None:
         inputs: dict[str, Any] = {}  # already applied above, just for analysis hooks
 
         if node.tool in _ANALYSIS_TOOLS:
-            if node.tool == "haddock3":
-                struct = outputs.get("best_complex")
-                scores = outputs.get("scores") or {}
-                if struct:
-                    await _save_analysis(run.id, node_id, node.tool,
-                                         {"structure": struct, "plddt": scores})
-            elif node.tool == "equidock":
-                struct = outputs.get("best_complex")
-                meta = outputs.get("metadata") or {}
-                if struct:
-                    await _save_analysis(run.id, node_id, node.tool,
-                                         {"structure": struct, "plddt": meta})
+            # haddock3 / equidock / immunebuilder / superwater — the inline block
+            # (above) already wrote NodeAnalysisRow with the real PDB.  Outputs here
+            # are slimmed ("__artifact__"), so we must not overwrite those rows.
+            if node.tool in (
+                "haddock3", "equidock", "immunebuilder", "superwater",
+                "esmfold", "alphafold_monomer", "equifold", "boltz2",
+            ):
+                pass  # inline block wrote NodeAnalysisRow with real PDB — do not overwrite
             elif node.tool == "megadock":
                 pass  # results_collector._collect_megadock_analysis saves the full analysis row
-            elif node.tool == "immunebuilder":
-                error_estimates = outputs.get("error_estimates") or []
-                for i in range(1, 5):
-                    struct = outputs.get(f"structure_{i}")
-                    if struct:
-                        await _save_analysis(
-                            run.id, f"{node_id}_model_{i}", node.tool,
-                            {
-                                "structure": struct,
-                                "plddt": {
-                                    "model_index": i,
-                                    "per_residue_rmsd": error_estimates,
-                                },
-                            }
-                        )
             elif node.tool == "gromacs_mmpbsa":
                 dg = outputs.get("delta_g_bind")
                 if dg is not None:
@@ -481,14 +509,6 @@ async def execute_run(run_id: str) -> None:
                         "delta_g_bind": dg,
                         "energy_decomposition": outputs.get("energy_decomposition") or {},
                         "md_convergence": outputs.get("md_convergence") or {},
-                    })
-            elif node.tool == "superwater":
-                struct = outputs.get("hydrated_structure")
-                water_count = outputs.get("water_count") or {}
-                if struct:
-                    await _save_analysis(run.id, node_id, node.tool, {
-                        "structure": struct,
-                        "water_count": water_count,
                     })
             elif "structure" in outputs or "plddt" in outputs:
                 await _save_analysis(run.id, node_id, node.tool, outputs)
@@ -511,6 +531,10 @@ async def execute_run(run_id: str) -> None:
     await _emit(run)
 
     if run.status == RunStatus.SUCCEEDED:
+        await _maybe_continue_loop(run, pipeline, run_id)
+    elif run.status == RunStatus.FAILED and run.loop_id:
+        # A node failure (e.g. loop_end failing because HADDOCK returned nothing)
+        # must not silently kill the loop. Continue with a fallback sequence.
         await _maybe_continue_loop(run, pipeline, run_id)
 
 
@@ -541,7 +565,7 @@ async def _do_continue_loop(
 ) -> None:
     from app.core.loop_executor import (
         _build_history_entry, _cancelled_loops, _extract_next_sequence,
-        _patch_pipeline, _save_loop,
+        _patch_pipeline, _pick_fallback_sequence, _save_loop,
     )
 
     if loop_id in _cancelled_loops:
@@ -552,8 +576,10 @@ async def _do_continue_loop(
         await _save_loop(loop_id, "cancelled", "user_cancelled", iteration, run_ids)
         return
 
-    # Build history entry for this iteration and persist
-    history_entry = await _build_history_entry(run_id, iteration, run)
+    run_failed = run.status == RunStatus.FAILED
+    # Build history entry only for successful iterations; failed runs produce no
+    # useful embedding/score data and would pollute the score history table.
+    history_entry = None if run_failed else await _build_history_entry(run_id, iteration, run)
     async with AsyncSessionLocal() as db:
         loop_row = await db.get(LoopRunRow, loop_id)
         if loop_row is None:
@@ -565,11 +591,17 @@ async def _do_continue_loop(
                 loop_id, iteration, loop_row.current_iteration,
             )
             return
+        # Always use DB-authoritative max_iterations — the /continue endpoint updates this
+        # column correctly, but the pipeline_snapshot may lag behind (stale value).
+        max_iterations = loop_row.max_iterations
         run_ids = json.loads(loop_row.run_ids or "[]")
         if run_id not in run_ids:
             run_ids.append(run_id)
         loop_history = json.loads(loop_row.loop_history or "[]")
-        if history_entry:
+        # Guard against duplicate history entries: if this iteration already has a score
+        # entry (from a previous run with the same iteration number), skip appending.
+        history_already_recorded = any(e.get("iteration") == iteration for e in loop_history)
+        if history_entry and not history_already_recorded:
             loop_history.append(history_entry)
         loop_row.run_ids = json.dumps(run_ids)
         loop_row.loop_history = json.dumps(loop_history)
@@ -587,6 +619,15 @@ async def _do_continue_loop(
     # to the stored pipeline (e.g., improved node design) take effect on the
     # next iteration without requiring a full loop restart.
     next_vh, next_vl = _extract_next_sequence(run)
+    # Fallback: if loop_end didn't produce a sequence (e.g. it failed because
+    # HADDOCK returned nothing), pick the first untested candidate saved from
+    # a previous iteration's ML node output.
+    if not next_vh:
+        next_vh, next_vl = _pick_fallback_sequence(loop_history)
+        if next_vh:
+            log.info("Loop %s iter %d — using fallback sequence (run %s failed)", loop_id, iteration + 1, run_id)
+        else:
+            log.warning("Loop %s iter %d — no fallback sequence available, loop will stall", loop_id, iteration + 1)
     async with AsyncSessionLocal() as db:
         _loop_row_snap = await db.get(LoopRunRow, loop_id)
         if _loop_row_snap is not None and _loop_row_snap.pipeline_snapshot:
@@ -594,6 +635,11 @@ async def _do_continue_loop(
             _fresh_pipeline = Pipeline.model_validate(_snap_data)
         else:
             _fresh_pipeline = pipeline
+        # Patch max_iterations from the DB column (authoritative) into all loop nodes
+        # so that runs created from a stale pipeline_snapshot still inherit the correct limit.
+        for _n in _fresh_pipeline.nodes:
+            if _n.tool in ("loop_start", "loop_end", "loop"):
+                _n.params = {**_n.params, "max_iterations": max_iterations}
     next_pipeline = _patch_pipeline(_fresh_pipeline, iteration + 1, next_vh, next_vl, loop_history)
     next_run = await create_run(next_pipeline, loop_id=loop_id, iteration=iteration + 1)
 

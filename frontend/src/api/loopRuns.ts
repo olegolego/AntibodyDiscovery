@@ -29,6 +29,7 @@ export interface LoopRunSummary {
   stop_reason: string | null;
   run_ids_count: number;
   latest_run_id?: string | null;
+  latest_run_status?: string | null;
   created_at: string;
   best_score?: number | null;
   best_iter?: number | null;
@@ -47,4 +48,9 @@ export async function getLoopRun(loopId: string): Promise<LoopRun> {
 
 export async function cancelLoopRun(loopId: string): Promise<void> {
   await api.post(`/loop-runs/${loopId}/cancel/`);
+}
+
+export async function continueLoopRun(loopId: string): Promise<{ ok: boolean; run_id: string; iteration: number }> {
+  const { data } = await api.post<{ ok: boolean; run_id: string; iteration: number }>(`/loop-runs/${loopId}/continue/`);
+  return data;
 }

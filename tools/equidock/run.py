@@ -35,6 +35,38 @@ def _progress(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+def _center_pdb(pdb_text: str):
+    """Translate all ATOM/HETATM records so the centre of mass is at origin.
+
+    Returns (centered_pdb_text, com_offset) where com_offset is a float32
+    ndarray of shape (3,).  Add com_offset back to restore the original frame.
+    """
+    import numpy as _np
+    coords = []
+    for line in pdb_text.splitlines():
+        if line.startswith("ATOM") or line.startswith("HETATM"):
+            try:
+                coords.append([float(line[30:38]), float(line[38:46]), float(line[46:54])])
+            except ValueError:
+                pass
+    if not coords:
+        return pdb_text, _np.zeros(3, dtype=_np.float32)
+    com = _np.mean(coords, axis=0)
+    new_lines = []
+    for line in pdb_text.splitlines():
+        if line.startswith("ATOM") or line.startswith("HETATM"):
+            try:
+                x = float(line[30:38]) - com[0]
+                y = float(line[38:46]) - com[1]
+                z = float(line[46:54]) - com[2]
+                new_lines.append(line[:30] + f"{x:8.3f}{y:8.3f}{z:8.3f}" + line[54:])
+            except ValueError:
+                new_lines.append(line)
+        else:
+            new_lines.append(line)
+    return "\n".join(new_lines) + "\n", com.astype(_np.float32)
+
+
 def _trim_pdb_to_best_chain(pdb_text: str, max_residues: int = _MAX_RECEPTOR_RESIDUES) -> str:
     """
     If the receptor has more than max_residues residues, extract the single chain
@@ -150,6 +182,15 @@ def _run(inputs: dict) -> dict:
 
     # Trim large receptors (multi-chain complexes, full spike, etc.) to avoid OOM
     receptor_pdb = _trim_pdb_to_best_chain(receptor_pdb)
+
+    # Centre both structures at origin so the predicted translation reflects only
+    # the docking-specific displacement, not the coordinate-frame offset between
+    # inputs (e.g. ImmuneBuilder outputs near origin, crystal structures often at
+    # (200, 200, 200)).  We store rec_com so we can restore the receptor frame
+    # in the output complex.
+    ligand_pdb,         lig_com = _center_pdb(ligand_pdb)
+    receptor_pdb_c,     rec_com = _center_pdb(receptor_pdb)
+
     if dataset not in ("dips", "db5"):
         raise ValueError("dataset must be 'dips' or 'db5'")
 
@@ -171,8 +212,8 @@ def _run(inputs: dict) -> dict:
     with tempfile.TemporaryDirectory() as tmpdir:
         lig_path = os.path.join(tmpdir, "pair_l_b.pdb")
         rec_path = os.path.join(tmpdir, "pair_r_b_COMPLEX.pdb")
-        Path(lig_path).write_text(ligand_pdb)
-        Path(rec_path).write_text(receptor_pdb)
+        Path(lig_path).write_text(ligand_pdb)        # already centred above
+        Path(rec_path).write_text(receptor_pdb_c)    # centred copy
 
         # All-atom ligand coordinates (before transformation)
         ppdb_lig = PandasPdb().read_pdb(lig_path)
@@ -275,11 +316,16 @@ def _run(inputs: dict) -> dict:
         else:
             final_pos = unbound_ligand_new_pos
 
-        # ── Write combined complex (docked ligand + original receptor) ──────────
+        # ── Restore receptor coordinate frame, then write the complex ──────────
+        # final_pos is in the centred-receptor frame; add rec_com to bring both
+        # ligand and receptor back to the original receptor coordinate system.
+        final_pos = final_pos + rec_com
+
         ppdb_lig.df["ATOM"][["x_coord", "y_coord", "z_coord"]] = final_pos
         out_lig = os.path.join(tmpdir, "docked_ligand.pdb")
         ppdb_lig.to_pdb(path=out_lig, records=["ATOM"], gz=False)
 
+        # Use original (uncentred) receptor so the complex is in one frame
         rec_atom_lines = [
             l for l in receptor_pdb.splitlines()
             if l.startswith("ATOM") or l.startswith("HETATM")
