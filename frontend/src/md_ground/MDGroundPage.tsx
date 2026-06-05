@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from "react";
-import { ArrowLeft, Atom, Download, FileUp, Film, Play, Sigma, Square, TrendingUp } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, Atom, Database, Film, Play, Save, Sigma, Square, TrendingUp } from "lucide-react";
 import { randomUUID } from "@/utils";
 import { ControlPanel } from "./ControlPanel";
 import { EnergyCharts } from "./EnergyCharts";
@@ -8,7 +8,9 @@ import { PlaybackControls } from "./PlaybackControls";
 import { Viewer3D } from "./Viewer3D";
 import { useMDSocket } from "./useMDSocket";
 import { useMDStore } from "./store";
-import { downloadRunJSON, downloadTrajectoryXYZ } from "./exporters";
+import { downloadTrajectoryXYZ } from "./exporters";
+import { getSavedRun, listSavedRuns, saveRun, type SavedRunMeta } from "./api";
+import type { SavedRunData } from "./store";
 
 const PHASE_LABEL: Record<string, string> = {
   minimize: "Minimising",
@@ -36,31 +38,54 @@ export function MDGroundPage({ onBack }: { onBack: () => void }) {
   const phase = useMDStore((s) => s.phase);
   const resetPlayback = useMDStore((s) => s.resetPlayback);
   const [rightTab, setRightTab] = useState<"energy" | "math">("energy");
-  const loadRunFileRef = useRef<HTMLInputElement | null>(null);
+  const [savedRuns, setSavedRuns] = useState<SavedRunMeta[]>([]);
+  const [saving, setSaving] = useState(false);
 
   const isRunning = status === "running" || status === "connecting";
   const st = STATUS_LABEL[status] ?? STATUS_LABEL.idle;
   const hasFrames = useMDStore((s) => s.frames.length > 0);
 
-  function saveJSON() {
+  const refreshSavedRuns = () => listSavedRuns().then(setSavedRuns).catch(() => {});
+  useEffect(() => { refreshSavedRuns(); }, []);
+
+  async function saveToDB() {
     const s = useMDStore.getState();
-    downloadRunJSON(s.spec, s.particleTypes, s.typeIndex, s.boxLengths, s.energyHistory, s.frames, s.summary);
+    const name = window.prompt("Name this run (saved to the database):", s.spec.name || "MD run");
+    if (name === null) return;
+    setSaving(true);
+    try {
+      await saveRun({
+        name,
+        spec: s.spec,
+        particle_types: s.particleTypes,
+        type_index: s.typeIndex,
+        box_lengths: s.boxLengths,
+        frames: s.frames.map((f) => ({ step: f.step, time: f.time, positions: Array.from(f.positions) })),
+        energy_history: s.energyHistory,
+        summary: s.summary,
+      });
+      await refreshSavedRuns();
+      s.setStatus(s.status, null);
+    } catch (err) {
+      s.setStatus("error", `Save failed: ${(err as Error).message}`);
+    } finally {
+      setSaving(false);
+    }
   }
+
+  async function loadFromDB(id: string) {
+    if (!id) return;
+    try {
+      const data = (await getSavedRun(id)) as SavedRunData;
+      useMDStore.getState().loadRun(data);
+    } catch (err) {
+      useMDStore.getState().setStatus("error", `Load failed: ${(err as Error).message}`);
+    }
+  }
+
   function saveXYZ() {
     const s = useMDStore.getState();
     downloadTrajectoryXYZ(s.spec.name, s.particleTypes, s.typeIndex, s.frames);
-  }
-  async function onLoadRunFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    e.target.value = "";
-    if (!file) return;
-    try {
-      const data = JSON.parse(await file.text());
-      if (data?.format !== "md-ground-run") throw new Error("Not an MD Ground run file");
-      useMDStore.getState().loadRun(data);
-    } catch (err) {
-      useMDStore.getState().setStatus("error", `Load run failed: ${(err as Error).message}`);
-    }
   }
 
   function handleRun() {
@@ -92,17 +117,24 @@ export function MDGroundPage({ onBack }: { onBack: () => void }) {
         )}
         {error && <span className="text-xs text-red-400 max-w-md truncate" title={error}>{error}</span>}
 
-        {/* Save / export run */}
-        <input ref={loadRunFileRef} type="file" accept=".json" onChange={onLoadRunFile} className="hidden" />
-        <button onClick={() => loadRunFileRef.current?.click()}
-          title="Load a saved .mdrun.json to replay it"
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white border border-border hover:border-slate-500">
-          <FileUp size={13} /> Load run
-        </button>
-        <button onClick={saveJSON} disabled={!hasFrames}
-          title="Download this run as JSON (re-loadable to replay)"
+        {/* Saved runs: load from DB */}
+        <select
+          value=""
+          onChange={(e) => loadFromDB(e.target.value)}
+          title="Open a run saved in the database"
+          className="bg-canvas border border-border rounded-lg px-2 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-indigo-500/60 max-w-[12rem]"
+        >
+          <option value="">Load run ({savedRuns.length})…</option>
+          {savedRuns.map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name} · {r.n_frames}f · {new Date(r.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+            </option>
+          ))}
+        </select>
+        <button onClick={saveToDB} disabled={!hasFrames || saving}
+          title="Save this run to the database (pull it later from any machine)"
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white border border-border hover:border-slate-500 disabled:opacity-40">
-          <Download size={13} /> Save run
+          {saving ? <Database size={13} className="animate-pulse" /> : <Save size={13} />} {saving ? "Saving…" : "Save run"}
         </button>
         <button onClick={saveXYZ} disabled={!hasFrames}
           title="Download the trajectory as multi-frame XYZ (PyMOL / VMD)"

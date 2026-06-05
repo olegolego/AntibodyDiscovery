@@ -327,6 +327,28 @@ class MDSimulationRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class MDSavedRunRow(Base):
+    """A completed MD Ground run with its trajectory, saved for replay/sharing.
+
+    Frames are decimated before storage (capped) so rows stay reasonable; this is
+    a replay/presentation artifact, not a full-resolution trajectory store.
+    """
+    __tablename__ = "md_saved_runs"
+
+    id:             Mapped[str]      = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name:           Mapped[str]      = mapped_column(String(255), nullable=False, default="MD run")
+    spec:           Mapped[str]      = mapped_column(Text, nullable=False)                 # JSON SystemSpec
+    particle_types: Mapped[str]      = mapped_column(Text, nullable=False, default="[]")   # JSON
+    type_index:     Mapped[str]      = mapped_column(Text, nullable=False, default="[]")   # JSON
+    box_lengths:    Mapped[str]      = mapped_column(Text, nullable=False, default="[]")   # JSON
+    frames:         Mapped[str]      = mapped_column(Text, nullable=False, default="[]")   # JSON (decimated)
+    energy_history: Mapped[str]      = mapped_column(Text, nullable=False, default="[]")   # JSON
+    summary:        Mapped[str|None] = mapped_column(Text, nullable=True)                  # JSON
+    n_particles:    Mapped[int]      = mapped_column(Integer, nullable=False, default=0)
+    n_frames:       Mapped[int]      = mapped_column(Integer, nullable=False, default=0)
+    created_at:     Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class MDForceScriptRow(Base):
     """A reusable custom force law: a formula U(r) or a Python force function."""
     __tablename__ = "md_force_scripts"

@@ -103,6 +103,43 @@ export async function importDocking(
   return r.json();
 }
 
+// ── Saved runs (persisted trajectories in the DB) ──────────────────────────────
+
+export interface SavedRunMeta {
+  id: string;
+  name: string;
+  n_particles: number;
+  n_frames: number;
+  created_at: string;
+}
+
+export interface SaveRunPayload {
+  name: string;
+  spec: SystemSpec;
+  particle_types: unknown[];
+  type_index: number[];
+  box_lengths: number[];
+  frames: { step: number; time: number; positions: number[] }[];
+  energy_history: unknown[];
+  summary: unknown;
+}
+
+export async function listSavedRuns(): Promise<SavedRunMeta[]> {
+  return jget(`${BASE}/runs`);
+}
+
+export async function saveRun(payload: SaveRunPayload): Promise<{ id: string; n_frames: number }> {
+  return jpost(`${BASE}/runs`, payload);
+}
+
+export async function getSavedRun(id: string): Promise<unknown> {
+  return jget(`${BASE}/runs/${id}`);
+}
+
+export async function deleteSavedRun(id: string): Promise<void> {
+  await fetch(`${BASE}/runs/${id}`, { method: "DELETE" });
+}
+
 // Saved simulations
 export interface SavedSim {
   id: string;

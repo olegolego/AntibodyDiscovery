@@ -14,7 +14,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import DockingResultRow, MDForceScriptRow, MDSimulationRow, MoleculeRow
+from app.db.models import (
+    DockingResultRow, MDForceScriptRow, MDSavedRunRow, MDSimulationRow, MoleculeRow,
+)
 from app.db.session import get_db
 from app.md import presets as md_presets
 from app.md.custom_exec import CustomForceError, smoke_test
@@ -121,6 +123,96 @@ async def cancel_simulation(sim_id: str) -> dict:
     from app.md.runner import request_cancel
     request_cancel(sim_id)
     return {"status": "cancelling", "sim_id": sim_id}
+
+
+# ── Saved runs (trajectory persisted in the DB, pull to replay) ───────────────
+
+_MAX_SAVE_FRAMES = 300  # decimate trajectories to keep DB rows reasonable
+
+
+class SaveRunRequest(BaseModel):
+    name: str = "MD run"
+    spec: dict
+    particle_types: list = []
+    type_index: list = []
+    box_lengths: list = []
+    frames: list = []           # [{step, time, positions: [..]}]
+    energy_history: list = []
+    summary: dict | None = None
+
+
+def _decimate(items: list, cap: int) -> list:
+    if len(items) <= cap:
+        return items
+    step = len(items) / cap
+    return [items[int(i * step)] for i in range(cap)]
+
+
+@router.get("/runs")
+async def list_saved_runs(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    rows = (await db.execute(
+        select(MDSavedRunRow).order_by(MDSavedRunRow.created_at.desc()).limit(200)
+    )).scalars().all()
+    return [
+        {
+            "id": r.id, "name": r.name, "n_particles": r.n_particles,
+            "n_frames": r.n_frames, "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
+
+
+@router.post("/runs", status_code=201)
+async def save_run(body: SaveRunRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    frames = _decimate(body.frames, _MAX_SAVE_FRAMES)
+    n_particles = 0
+    if frames and isinstance(frames[0], dict):
+        n_particles = len(frames[0].get("positions", [])) // 3
+    row = MDSavedRunRow(
+        name=body.name or "MD run",
+        spec=json.dumps(body.spec),
+        particle_types=json.dumps(body.particle_types),
+        type_index=json.dumps(body.type_index),
+        box_lengths=json.dumps(body.box_lengths),
+        frames=json.dumps(frames),
+        energy_history=json.dumps(_decimate(body.energy_history, 1000)),
+        summary=json.dumps(body.summary) if body.summary is not None else None,
+        n_particles=n_particles,
+        n_frames=len(frames),
+    )
+    db.add(row)
+    await db.commit()
+    return {"id": row.id, "n_frames": len(frames)}
+
+
+@router.get("/runs/{run_id}")
+async def get_saved_run(run_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Return a saved run in the shape the frontend's loadRun() expects."""
+    row = await db.get(MDSavedRunRow, run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Saved run not found")
+    return {
+        "format": "md-ground-run",
+        "version": 1,
+        "name": row.name,
+        "spec": json.loads(row.spec),
+        "particle_types": json.loads(row.particle_types),
+        "type_index": json.loads(row.type_index),
+        "box_lengths": json.loads(row.box_lengths),
+        "energy_history": json.loads(row.energy_history),
+        "frames": json.loads(row.frames),
+        "summary": json.loads(row.summary) if row.summary else None,
+    }
+
+
+@router.delete("/runs/{run_id}")
+async def delete_saved_run(run_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    row = await db.get(MDSavedRunRow, run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Saved run not found")
+    await db.delete(row)
+    await db.commit()
+    return {"deleted": run_id}
 
 
 # ── Custom force scripts ────────────────────────────────────────────────────
