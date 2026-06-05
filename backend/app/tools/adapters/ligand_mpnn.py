@@ -28,7 +28,6 @@ class LigandMPNNAdapter:
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
         structure = str(inputs.get("structure", "") or "").strip()
-        ligand = str(inputs.get("ligand", "LIG") or "LIG").strip()
         num_sequences = int(inputs.get("num_sequences", 10) or 10)
         redesigned_raw = inputs.get("redesigned", [])
         sampling_temp = float(inputs.get("sampling_temp", 0.1) or 0.1)
@@ -43,7 +42,6 @@ class LigandMPNNAdapter:
 
         cache_key: dict[str, Any] = {
             "structure": structure,
-            "ligand": ligand,
             "num_sequences": num_sequences,
             "redesigned": redesigned_list,
             "sampling_temp": sampling_temp,
@@ -61,7 +59,7 @@ class LigandMPNNAdapter:
         )
         await run_ctx.alog(
             f"LigandMPNN: designing {num_sequences} sequences "
-            f"(ligand={ligand}, {pocket_msg}, temp={sampling_temp})"
+            f"({pocket_msg}, temp={sampling_temp})"
         )
 
         python_path = str(_TOOL_PYTHON) if _TOOL_PYTHON.exists() else None

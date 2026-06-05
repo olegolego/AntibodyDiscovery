@@ -520,18 +520,25 @@ def _run(inputs: dict) -> dict:
     if prev_states and rewards_map:
         iter_mean_reward = 0.0
         count = 0
-        for sid in seq_ids:
-            if sid in prev_states and sid in prev_actions:
-                ps_vec = prev_states[sid]
-                pa_idx = prev_actions[sid]
-                reward = float(rewards_map.get(sid, 0.0))
-                curr_vec = states_t[seq_ids.index(sid)].tolist()
-                buffer.push(ps_vec, pa_idx, reward, curr_vec, done=False)
-                iter_mean_reward += reward
-                count += 1
+        # Iterate over prev_states keys (previous iteration's seq_ids) — NOT current seq_ids.
+        # After CDR mutation + hill-climbing selection the current sequence usually differs from
+        # the previous one, so matching on seq_ids would always miss.
+        for prev_sid, ps_vec in prev_states.items():
+            if prev_sid not in prev_actions:
+                continue
+            pa_idx = prev_actions[prev_sid]
+            reward = float(rewards_map.get(prev_sid, 0.0))
+            # next_state: use the current embedding for this prev_sid if it still exists
+            # (rejection case), otherwise fall back to the first current state (accept case).
+            if prev_sid in seq_ids:
+                curr_vec = states_t[seq_ids.index(prev_sid)].tolist()
+            else:
+                curr_vec = states_t[0].tolist()
+            buffer.push(ps_vec, pa_idx, reward, curr_vec, done=False)
+            iter_mean_reward += reward
+            count += 1
         if count > 0:
             episode_rewards.append(iter_mean_reward / count)
-        # Keep reward history bounded
         if len(episode_rewards) > 200:
             episode_rewards = episode_rewards[-200:]
 

@@ -346,8 +346,7 @@ def main() -> None:
         raise ValueError("At least one of heavy_chain or light_chain is required")
 
     # ── CDR region selection ───────────────────────────────────────────────────
-    # New format: individual bool inputs cdr_h1…cdr_l3  (v1.1+)
-    # Fallback:   legacy comma-string cdr_regions        (v1.0)
+    # Priority: cdr_target string (from RL agent) > individual bool inputs > legacy string
     _CDR_BOOL_MAP = {
         "CDR_H1": "cdr_h1",
         "CDR_H2": "cdr_h2",
@@ -357,7 +356,14 @@ def main() -> None:
         "CDR_L3": "cdr_l3",
     }
     selected_cdrs: set[str] = set()
-    if any(k in inputs for k in _CDR_BOOL_MAP.values()):
+    cdr_target = str(inputs.get("cdr_target", "") or "").strip()
+    if cdr_target:
+        # Normalize: "H3" / "CDR_H3" / "cdr_h3" → "CDR_H3"
+        ct = cdr_target.upper().replace("-", "_")
+        if not ct.startswith("CDR_"):
+            ct = f"CDR_{ct}"
+        selected_cdrs = {ct}
+    elif any(k in inputs for k in _CDR_BOOL_MAP.values()):
         # At least one bool key present → use new format
         for cdr_name, input_key in _CDR_BOOL_MAP.items():
             val = inputs.get(input_key, False)

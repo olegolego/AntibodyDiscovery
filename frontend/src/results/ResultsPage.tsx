@@ -60,7 +60,7 @@ async function fetchMolecules(pipelineId: string): Promise<MoleculeSummary[]> {
 }
 
 async function fetchMolecule(id: string): Promise<MoleculeDetail> {
-  const r = await fetch(`/api/results/molecules/${id}/`);
+  const r = await fetch(`/api/results/molecules/${id}`);
   if (!r.ok) throw new Error("Failed to fetch molecule");
   return r.json();
 }
@@ -320,14 +320,18 @@ function MoleculeDetail({
   onBack: () => void;
   onOpenRun: (runId: string) => void;
 }) {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ["molecule", id],
     queryFn: () => fetchMolecule(id),
+    retry: 1,
   });
   const [saveOpen, setSaveOpen] = useState(false);
 
-  if (isLoading || !data) {
+  if (isLoading) {
     return <div className="p-8 text-slate-600 animate-pulse">Loading…</div>;
+  }
+  if (isError || !data) {
+    return <div className="p-8 text-red-400 text-sm">Failed to load molecule data.</div>;
   }
 
   return (

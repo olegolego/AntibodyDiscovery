@@ -22,8 +22,34 @@ class MutationProfilerAdapter:
         original = str(inputs.get("original", "")).strip()
         mutants = inputs.get("mutants", [])
 
+        # Accept upstream heavy_chain when 'original' is not wired explicitly
+        if not original:
+            original = str(inputs.get("heavy_chain", "")).strip()
+            if original:
+                inputs = {**inputs, "original": original}
+
         if not original:
             raise ValueError("mutation_profiler requires 'original' sequence")
+
+        # Collect variant_1..N heavy chains from cdr_mutator when 'mutants' not wired
+        if isinstance(mutants, str):
+            import json as _json
+            try:
+                mutants = _json.loads(mutants)
+            except Exception:
+                mutants = [mutants]
+        if not isinstance(mutants, list) or len(mutants) == 0:
+            collected: list[str] = []
+            for i in range(1, 10):
+                v = inputs.get(f"variant_{i}")
+                if v is None:
+                    break
+                seq = v.get("heavy_chain", "").strip() if isinstance(v, dict) else str(v).strip()
+                if seq:
+                    collected.append(seq)
+            if collected:
+                mutants = collected
+                inputs = {**inputs, "mutants": mutants}
 
         # Normalize mutants to a list for cache key stability
         if isinstance(mutants, str):

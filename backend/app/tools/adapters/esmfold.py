@@ -13,7 +13,8 @@ class ESMFoldAdapter:
         self._cache = MoleculeResultCache(tool_id="esmfold", tool_version=spec.version)
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
-        raw = inputs.get("sequence") or inputs.get("heavy_chain") or inputs.get("light_chain") or ""
+        # Prefer heavy_chain (upstream edge) over sequence (node param) so wired pipelines win.
+        raw = inputs.get("heavy_chain") or inputs.get("sequence") or inputs.get("light_chain") or ""
         # ProteinMPNN outputs a list of strings; Fuse outputs a list of {id, sequence, ...}
         if isinstance(raw, list):
             raw = raw[0] if raw else ""

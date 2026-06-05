@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Canvas } from "./canvas/Canvas";
 import { ParamPanel } from "./canvas/ParamPanel";
 import { Palette } from "./palette/Palette";
@@ -15,7 +15,9 @@ import { DatasetPage } from "./datasets/DatasetPage";
 import { TerminalPage } from "./terminal/TerminalPage";
 import { DNNDesignerPage } from "./dnn_designer/DNNDesignerPage";
 import { RLDesignerPage } from "./rl_designer/RLDesignerPage";
-import { submitRun } from "./api/runs";
+// three.js is heavy — lazy-load the MD Ground page so it ships as its own chunk.
+const MDGroundPage = lazy(() => import("./md_ground/MDGroundPage").then((m) => ({ default: m.MDGroundPage })));
+import { submitRun, getRun } from "./api/runs";
 import { getLoopRun, type LoopRun } from "./api/loopRuns";
 import { useCanvasStore } from "./canvas/store";
 import { useTools } from "./api/tools";
@@ -45,7 +47,7 @@ export default function App() {
   const [loopRunning, setLoopRunning] = useState(false);
   const [loopData, setLoopData] = useState<LoopRun | null>(null);
   const [analysis, setAnalysis] = useState<{ runId: string; nodeId: string } | null>(null);
-  const [page, setPage] = useState<"canvas" | "playground" | "workshop" | "results" | "library" | "terminal" | "runs" | "report" | "dnn_designer" | "ml_analysis" | "rl_designer">("canvas");
+  const [page, setPage] = useState<"canvas" | "playground" | "workshop" | "results" | "library" | "terminal" | "runs" | "report" | "dnn_designer" | "ml_analysis" | "rl_designer" | "md_ground">("canvas");
   const [dnnDesignerNodeId, setDnnDesignerNodeId] = useState<string | null>(null);
   const [dnnDesignerSpec, setDnnDesignerSpec] = useState<ArchitectureSpec | null>(null);
   const [dnnDesignerContext, setDnnDesignerContext] = useState<DNNContext | null>(null);
@@ -153,6 +155,60 @@ export default function App() {
     return () => clearInterval(id);
   }, [loopRunId, loopRunning]);
 
+  // Open a run with full context: load its pipeline onto the canvas, re-sync from
+  // the DB, and — if the run belongs to a loop campaign — restore the loop panel so
+  // every iteration is visible (with this run selected). Shared by the Runs page and
+  // the Results page so a result always reopens the real pipeline it ran through,
+  // showing all iterations (not just the single one that produced the result).
+  function openRun(run: Run) {
+    const snapshot = run.pipeline_snapshot as unknown as Pipeline;
+    const targetPipelineId = snapshot.id ?? run.pipeline_id;
+    loadPipeline(snapshot, tools ?? []);
+    setPipelineName(snapshot.name ?? "Untitled pipeline");
+    setPipelineId(targetPipelineId);
+    localStorage.setItem("pdp_pipeline_name", snapshot.name ?? "Untitled pipeline");
+    localStorage.setItem(PIPELINE_ID_KEY, targetPipelineId);
+    // Re-sync canvas from DB so any corrections (e.g. fixed edges) override the
+    // potentially stale snapshot baked into the run record.
+    fetch("/api/pipelines/")
+      .then((r) => r.json())
+      .then((pipelines: Pipeline[]) => {
+        const saved = pipelines.find((p) => p.id === targetPipelineId);
+        if (saved && tools?.length) {
+          loadPipeline(saved, tools);
+          setPipelineName(saved.name ?? "Untitled pipeline");
+        }
+      })
+      .catch(() => {});
+    setRunId(run.id);
+    localStorage.setItem(RUN_KEY, run.id);
+    // If this run belongs to a loop campaign, restore the loop panel so all
+    // iterations show (with this run/iteration selected).
+    if (run.loop_id) {
+      setLoopRunId(run.loop_id);
+      setLoopRunning(run.status === "running");
+      getLoopRun(run.loop_id).then(setLoopData).catch(() => {});
+    } else {
+      setLoopRunId(null);
+      setLoopRunning(false);
+      setLoopData(null);
+    }
+    setPage("canvas");
+  }
+
+  // Same as openRun but starting from just a run id (the Results page only knows the
+  // run id a given structure/docking/design result was produced in).
+  async function openRunById(rid: string) {
+    try {
+      openRun(await getRun(rid));
+    } catch (err) {
+      console.error("Failed to open run", rid, err);
+      setRunId(rid);
+      localStorage.setItem(RUN_KEY, rid);
+      setPage("canvas");
+    }
+  }
+
   if (page === "report" && reportRunId) {
     return (
       <RunReport
@@ -240,40 +296,7 @@ export default function App() {
     return (
       <RunsPage
         onBack={() => setPage("canvas")}
-        onOpenRun={(run: Run) => {
-          const snapshot = run.pipeline_snapshot as unknown as Pipeline;
-          const targetPipelineId = snapshot.id ?? run.pipeline_id;
-          loadPipeline(snapshot, tools ?? []);
-          setPipelineName(snapshot.name ?? "Untitled pipeline");
-          setPipelineId(targetPipelineId);
-          localStorage.setItem("pdp_pipeline_name", snapshot.name ?? "Untitled pipeline");
-          localStorage.setItem(PIPELINE_ID_KEY, targetPipelineId);
-          // Re-sync canvas from DB so any corrections (e.g. fixed edges) override the
-          // potentially stale snapshot baked into the run record.
-          fetch("/api/pipelines/")
-            .then((r) => r.json())
-            .then((pipelines: Pipeline[]) => {
-              const saved = pipelines.find((p) => p.id === targetPipelineId);
-              if (saved && tools?.length) {
-                loadPipeline(saved, tools);
-                setPipelineName(saved.name ?? "Untitled pipeline");
-              }
-            })
-            .catch(() => {});
-          setRunId(run.id);
-          localStorage.setItem(RUN_KEY, run.id);
-          // If this run belongs to a loop campaign, restore the loop panel
-          if (run.loop_id) {
-            setLoopRunId(run.loop_id);
-            setLoopRunning(run.status === "running");
-            getLoopRun(run.loop_id).then(setLoopData).catch(() => {});
-          } else {
-            setLoopRunId(null);
-            setLoopRunning(false);
-            setLoopData(null);
-          }
-          setPage("canvas");
-        }}
+        onOpenRun={(run: Run) => openRun(run)}
         onViewReport={(id) => {
           setReportRunId(id);
           setPage("report");
@@ -299,11 +322,7 @@ export default function App() {
     return (
       <ResultsPage
         onBack={() => setPage("canvas")}
-        onOpenRun={(id) => {
-          setRunId(id);
-          localStorage.setItem(RUN_KEY, id);
-          setPage("canvas");
-        }}
+        onOpenRun={(id) => openRunById(id)}
       />
     );
   }
@@ -318,6 +337,14 @@ export default function App() {
 
   if (page === "ml_analysis") {
     return <MLAnalysisPage onBack={() => setPage("canvas")} />;
+  }
+
+  if (page === "md_ground") {
+    return (
+      <Suspense fallback={<div className="h-screen flex items-center justify-center text-slate-500 bg-canvas">Loading MD Ground…</div>}>
+        <MDGroundPage onBack={() => setPage("canvas")} />
+      </Suspense>
+    );
   }
 
 return (
@@ -336,6 +363,7 @@ return (
         onOpenTerminal={() => setPage("terminal")}
         onOpenRuns={() => setPage("runs")}
         onOpenMLAnalysis={() => setPage("ml_analysis")}
+        onOpenMDGround={() => setPage("md_ground")}
         onNewPipeline={() => { setRunId(null); localStorage.removeItem("pdp_last_run_id"); }}
         onPipelineIdChange={(id) => {
           setPipelineId(id);
@@ -367,7 +395,7 @@ return (
         )}
 
         {(runId || loopRunId) && (
-          <div className="w-80 shrink-0 border-l border-border bg-surface overflow-hidden flex flex-col">
+          <div className="w-[26rem] shrink-0 border-l border-border bg-surface overflow-hidden flex flex-col">
             <RunPanel
               runId={runId}
               loopRunId={loopRunId}

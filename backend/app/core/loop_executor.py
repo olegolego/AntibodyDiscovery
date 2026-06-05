@@ -97,6 +97,25 @@ def _patch_pipeline(
     data = deepcopy(data)
 
     accumulated = _build_accumulated_dataset(loop_history or [])
+    accumulated_rl = _build_accumulated_rl_state(loop_history or [])
+
+    # Build RL reward_signals from the most recent history entry.
+    # The key is the VH sequence that was evaluated, matching the seq_id the RL agent
+    # stored in prev_states.  Both "objective_score" (biophysical pipelines) and
+    # "haddock_score" (docking pipelines) are forwarded so any rl_spec port works.
+    rl_reward_signals: dict[str, dict[str, float]] = {}
+    if loop_history:
+        last = loop_history[-1]
+        reward_vh = last.get("vh")
+        if reward_vh:
+            for score_key, port_name in (
+                ("objective_score", "composite_fitness"),
+                ("objective_score", "objective_score"),
+                ("haddock_score",   "haddock_score"),
+            ):
+                score_val = last.get(score_key)
+                if isinstance(score_val, (int, float)):
+                    rl_reward_signals[port_name] = {str(reward_vh): float(score_val)}
 
     for node in data["nodes"]:
         # Patch input sequences
@@ -107,10 +126,15 @@ def _patch_pipeline(
         if node["tool"] in ("rcc_mlde", "dnn_mlde", "custom_dnn") and accumulated:
             node["params"] = {**node.get("params", {}), "accumulated_dataset": accumulated}
 
-        # Inject rolling policy_state into rl_designer nodes
-        accumulated_rl = _build_accumulated_rl_state(loop_history or [])
-        if node["tool"] == "rl_designer" and accumulated_rl:
-            node["params"] = {**node.get("params", {}), "policy_state": accumulated_rl}
+        # Inject rolling policy_state and reward_signals into rl_designer nodes
+        if node["tool"] == "rl_designer":
+            patch: dict = {}
+            if accumulated_rl:
+                patch["policy_state"] = accumulated_rl
+            if rl_reward_signals:
+                patch["reward_signals"] = rl_reward_signals
+            if patch:
+                node["params"] = {**node.get("params", {}), **patch}
 
     return Pipeline.model_validate(data)
 
@@ -283,6 +307,20 @@ async def _build_history_entry(run_id: str, iteration: int, run: Run) -> dict[st
                     if "haddock_score" not in entry:
                         entry["haddock_score"] = float(val)
                     break
+
+    # ── Composite objective score (loop_objective / RL reward) ────────────────
+    # Captured here so _patch_pipeline can inject it as reward_signals into rl_designer
+    # on the NEXT iteration.  Both "objective_score" (biophysical pipeline) and
+    # "haddock_score" (docking pipeline) are stored so generic injection works.
+    _OBJECTIVE_TOOLS = {"loop_objective"}
+    for node_id, node_run in run.nodes.items():
+        if node_run.status != "succeeded":
+            continue
+        if snap_tool.get(node_id, "") not in _OBJECTIVE_TOOLS:
+            continue
+        obj = (node_run.outputs or {}).get("objective_score")
+        if isinstance(obj, (int, float)) and "objective_score" not in entry:
+            entry["objective_score"] = float(obj)
 
     # Also pull docking scores from DB (existing path)
     try:

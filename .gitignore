@@ -68,3 +68,6 @@ tools/superwater/*.pdf
 .vscode/settings.json
 tools/netsolp/NetSolP-1.0/
 tools/progen2/progen_src/
+
+bug_reports/
+bugs/

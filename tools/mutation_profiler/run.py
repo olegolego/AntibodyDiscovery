@@ -136,6 +136,7 @@ def _run(inputs: dict) -> dict:
         "absolute_frequencies": {str(k): v for k, v in absolute.items()},
         "relative_frequencies": {str(k): v for k, v in relative.items()},
         "mutation_summary": mutation_summary,
+        "original": original,  # pass-through so mutation_composer downstream can find the WT
     }
 
 

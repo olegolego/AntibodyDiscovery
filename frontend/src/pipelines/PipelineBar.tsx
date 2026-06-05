@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { BarChart2, BookOpen, ChevronDown, ClipboardList, Database, FilePlus, FlaskConical, FolderOpen, Loader2, Play, Save, Sparkles, Terminal, Trash2, Wrench } from "lucide-react";
+import { Atom, BarChart2, BookOpen, ChevronDown, ClipboardList, Database, FilePlus, FlaskConical, FolderOpen, Loader2, MessageSquare, Play, Save, Sparkles, Terminal, Trash2, Wrench } from "lucide-react";
+import { FeedbackModal } from "@/feedback/FeedbackModal";
 import { usePipelines, savePipeline, deletePipeline } from "@/api/pipelines";
 import { useCanvasStore } from "@/canvas/store";
 import { useTools } from "@/api/tools";
@@ -23,6 +24,7 @@ interface PipelineBarProps {
   onOpenTerminal: () => void;
   onOpenRuns: () => void;
   onOpenMLAnalysis: () => void;
+  onOpenMDGround: () => void;
   onNewPipeline: () => void;
 }
 
@@ -36,10 +38,11 @@ function ts(iso: string | undefined): string {
 export function PipelineBar({
   name, onNameChange, onRun, running, loopRunning,
   pipelineId, onPipelineIdChange,
-  onOpenPlayground, onOpenWorkshop, onOpenResults, onOpenLibrary, onOpenTerminal, onOpenRuns, onOpenMLAnalysis, onNewPipeline,
+  onOpenPlayground, onOpenWorkshop, onOpenResults, onOpenLibrary, onOpenTerminal, onOpenRuns, onOpenMLAnalysis, onOpenMDGround, onNewPipeline,
 }: PipelineBarProps) {
   const [showLoad, setShowLoad] = useState(false);
   const [showAI, setShowAI] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -90,6 +93,9 @@ export function PipelineBar({
     setDeletingId(id);
     try {
       await deletePipeline(id);
+      queryClient.invalidateQueries({ queryKey: ["pipelines"] });
+    } catch {
+      // pipeline may already be gone; refresh the list so it disappears from the UI
       queryClient.invalidateQueries({ queryKey: ["pipelines"] });
     } finally {
       setDeletingId(null);
@@ -246,6 +252,18 @@ export function PipelineBar({
         <span>Analysis</span>
       </button>
 
+      {/* MD Ground */}
+      <button onClick={onOpenMDGround} className={btn}>
+        <Atom size={13} />
+        <span>MD Ground</span>
+      </button>
+
+      {/* Feedback */}
+      <button onClick={() => setShowFeedback(true)} className={btn}>
+        <MessageSquare size={13} />
+        <span>Feedback</span>
+      </button>
+
       {/* Run */}
       <button
         onClick={onRun}
@@ -262,6 +280,10 @@ export function PipelineBar({
           : <Play size={13} fill="white" />}
         <span>{running ? "Submitting…" : "Run"}</span>
       </button>
+
+      {showFeedback && (
+        <FeedbackModal mode="feedback" onClose={() => setShowFeedback(false)} />
+      )}
 
       {showAI && (
         <AIPipelineModal

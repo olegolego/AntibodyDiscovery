@@ -1,0 +1,279 @@
+"""REST API for MD Ground: presets, saved simulations, custom force scripts,
+formula/python validation, and AI code generation for custom forces.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.models import MDForceScriptRow, MDSimulationRow
+from app.db.session import get_db
+from app.md import presets as md_presets
+from app.md.custom_exec import CustomForceError, smoke_test
+from app.md.pdb_import import PDBImportError, build_enm_spec
+from app.md.potential_eval import FormulaError, validate_formula
+from app.md.spec import SystemSpec
+
+router = APIRouter()
+
+
+# ── Presets ─────────────────────────────────────────────────────────────────
+
+@router.get("/presets")
+async def get_presets() -> dict:
+    return {"presets": md_presets.list_presets()}
+
+
+@router.get("/presets/{key}")
+async def get_preset(key: str) -> dict:
+    try:
+        spec = md_presets.get_preset(key)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown preset: {key}")
+    return {"spec": spec.model_dump()}
+
+
+# ── Saved simulations ─────────────────────────────────────────────────────────
+
+class SaveSimRequest(BaseModel):
+    name: str = "Untitled simulation"
+    spec: dict
+
+
+@router.get("/simulations")
+async def list_simulations(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    rows = (await db.execute(
+        select(MDSimulationRow).order_by(MDSimulationRow.updated_at.desc()).limit(100)
+    )).scalars().all()
+    return [
+        {
+            "id": r.id, "name": r.name, "status": r.status,
+            "created_at": r.created_at.isoformat(), "updated_at": r.updated_at.isoformat(),
+        }
+        for r in rows
+    ]
+
+
+@router.get("/simulations/{sim_id}")
+async def get_simulation(sim_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    row = await db.get(MDSimulationRow, sim_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    return {
+        "id": row.id, "name": row.name, "status": row.status,
+        "spec": json.loads(row.spec),
+        "summary": json.loads(row.summary) if row.summary else None,
+        "created_at": row.created_at.isoformat(), "updated_at": row.updated_at.isoformat(),
+    }
+
+
+@router.post("/simulations", status_code=201)
+async def create_simulation(body: SaveSimRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    # Validate the spec round-trips through the engine model.
+    try:
+        spec = SystemSpec.model_validate(body.spec)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Invalid spec: {exc}")
+    row = MDSimulationRow(name=body.name, spec=spec.model_dump_json(), status="draft")
+    db.add(row)
+    await db.commit()
+    return {"id": row.id}
+
+
+@router.put("/simulations/{sim_id}")
+async def update_simulation(sim_id: str, body: SaveSimRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    row = await db.get(MDSimulationRow, sim_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    try:
+        spec = SystemSpec.model_validate(body.spec)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Invalid spec: {exc}")
+    row.name = body.name
+    row.spec = spec.model_dump_json()
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    return {"id": row.id}
+
+
+@router.delete("/simulations/{sim_id}")
+async def delete_simulation(sim_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    row = await db.get(MDSimulationRow, sim_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Simulation not found")
+    await db.delete(row)
+    await db.commit()
+    return {"deleted": sim_id}
+
+
+@router.post("/simulations/{sim_id}/cancel")
+async def cancel_simulation(sim_id: str) -> dict:
+    from app.md.runner import request_cancel
+    request_cancel(sim_id)
+    return {"status": "cancelling", "sim_id": sim_id}
+
+
+# ── Custom force scripts ────────────────────────────────────────────────────
+
+class ForceScriptRequest(BaseModel):
+    name: str
+    kind: str = "formula"        # formula | python
+    body: str
+    description: str | None = None
+
+
+@router.get("/force-scripts")
+async def list_force_scripts(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    rows = (await db.execute(
+        select(MDForceScriptRow).order_by(MDForceScriptRow.updated_at.desc()).limit(200)
+    )).scalars().all()
+    return [
+        {"id": r.id, "name": r.name, "kind": r.kind, "body": r.body, "description": r.description}
+        for r in rows
+    ]
+
+
+@router.post("/force-scripts", status_code=201)
+async def create_force_script(body: ForceScriptRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    row = MDForceScriptRow(name=body.name, kind=body.kind, body=body.body, description=body.description)
+    db.add(row)
+    await db.commit()
+    return {"id": row.id}
+
+
+@router.put("/force-scripts/{script_id}")
+async def update_force_script(script_id: str, body: ForceScriptRequest, db: AsyncSession = Depends(get_db)) -> dict:
+    row = await db.get(MDForceScriptRow, script_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Force script not found")
+    row.name, row.kind, row.body, row.description = body.name, body.kind, body.body, body.description
+    row.updated_at = datetime.utcnow()
+    await db.commit()
+    return {"id": row.id}
+
+
+@router.delete("/force-scripts/{script_id}")
+async def delete_force_script(script_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    row = await db.get(MDForceScriptRow, script_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="Force script not found")
+    await db.delete(row)
+    await db.commit()
+    return {"deleted": script_id}
+
+
+# ── Validation ──────────────────────────────────────────────────────────────
+
+class FormulaRequest(BaseModel):
+    expression: str
+
+
+@router.post("/validate-formula")
+async def validate_formula_endpoint(body: FormulaRequest) -> dict:
+    try:
+        return validate_formula(body.expression)
+    except FormulaError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+class ImportPDBRequest(BaseModel):
+    pdb: str
+    name: str = "Imported structure"
+    spring_k: float = 1.0
+    temperature: float = 0.6
+
+
+@router.post("/import-pdb")
+async def import_pdb(body: ImportPDBRequest) -> dict:
+    """Parse a PDB into an elastic-network SystemSpec (atoms = particles)."""
+    try:
+        spec = await asyncio.to_thread(
+            build_enm_spec, body.pdb, body.name, body.spring_k, body.temperature
+        )
+    except PDBImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "spec": spec.model_dump(),
+        "n_particles": spec.n_particles,
+        "n_bonds": len(spec.bonds),
+    }
+
+
+class PythonRequest(BaseModel):
+    code: str
+
+
+@router.post("/validate-python")
+async def validate_python_endpoint(body: PythonRequest) -> dict:
+    try:
+        return await asyncio.to_thread(smoke_test, body.code)
+    except CustomForceError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+# ── AI code generation (forks compute.generate_code with an MD persona) ───────
+
+_MD_SYSTEM_PROMPT = """\
+You are an expert in classical molecular dynamics and scientific Python. You \
+write custom pairwise force functions for a numpy-based MD engine.
+
+## Required interface
+Define exactly one function:
+
+    def force(pos, type_index, box, params):
+        # pos: numpy float64 array, shape (N, 3) — particle positions
+        # type_index: numpy int array, shape (N,) — particle species indices
+        # box: object with .lengths (list of 3 floats) and .boundary (str)
+        # params: dict of optional scalar parameters
+        # returns: (forces, potential_energy)
+        #   forces: numpy float64 array shape (N, 3)
+        #   potential_energy: float
+        ...
+
+## Rules
+- numpy is available as `np`. scipy and math are available.
+- Vectorise over particle pairs; avoid Python loops over N where possible.
+- Newton's third law: the force array must sum (approximately) to zero for \
+internal forces.
+- Return ONLY executable Python — no markdown fences, no prose, no comments \
+outside the function.
+- Do not call print(). Do not read files or network.\
+"""
+
+
+class CodegenRequest(BaseModel):
+    prompt: str
+
+
+def _extract_code(text: str) -> str:
+    fenced = re.search(r"```(?:python)?\n(.*?)```", text, re.DOTALL)
+    return fenced.group(1).strip() if fenced else text.strip()
+
+
+@router.post("/codegen")
+async def codegen(body: CodegenRequest) -> dict:
+    child_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "claude", "--print", "--system-prompt", _MD_SYSTEM_PROMPT, body.prompt,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=child_env,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Claude CLI timed out (60s)")
+    except FileNotFoundError:
+        raise HTTPException(status_code=503, detail="'claude' CLI not found on PATH")
+
+    if proc.returncode != 0:
+        err = (stderr.decode("utf-8", errors="replace") or stdout.decode("utf-8", errors="replace"))[:400]
+        raise HTTPException(status_code=502, detail=f"Claude CLI error: {err}")
+
+    return {"code": _extract_code(stdout.decode("utf-8", errors="replace"))}

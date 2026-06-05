@@ -28,6 +28,10 @@ def _progress(msg: str) -> None:
 # ── GROMACS binary detection ───────────────────────────────────────────────────
 
 _CONDA_MMPBSA = os.path.expanduser("~/miniforge3/envs/mmpbsa/bin")
+# PDBFixer runs in its own env (openmm); used to add missing heavy atoms before pdb2gmx.
+_PDBFIXER_PY = os.getenv("GROMACS_PDBFIXER_PYTHON") or os.path.expanduser(
+    "~/miniforge3/envs/pdbfixer/bin/python"
+)
 
 
 def _find_bin(name: str) -> str:
@@ -54,6 +58,19 @@ def _find_gmx() -> str:
 
 def _n_threads() -> int:
     return max(1, os.cpu_count() or 1)
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int from the environment, falling back to default if unset/invalid.
+
+    Used to shrink NVT/NPT/production step counts for fast smoke tests
+    (e.g. GROMACS_NVT_STEPS=2000) without touching the production defaults.
+    """
+    try:
+        v = os.getenv(name)
+        return int(v) if v not in (None, "") else default
+    except (TypeError, ValueError):
+        return default
 
 
 # ── Subprocess wrapper ─────────────────────────────────────────────────────────
@@ -86,20 +103,69 @@ def _run(
 
 # ── Index file creation (replaces rips_build_ndx.py) ──────────────────────────
 
+def _distinct_chain_order(pdb: Path, protein_only: bool = False) -> list[str]:
+    """Chain IDs in order of first appearance in a PDB file."""
+    order: list[str] = []
+    with open(pdb) as f:
+        for line in f:
+            if not (line.startswith("ATOM") or (not protein_only and line.startswith("HETATM"))):
+                continue
+            ch = line[21].strip().upper()
+            if not ch:
+                continue
+            if protein_only and line[17:20].strip().upper() in ("HOH", "WAT", "SOL"):
+                continue
+            if ch not in order:
+                order.append(ch)
+    return order
+
+
 def _create_chain_index(
     ref_pdb: Path,
     ndx_path: Path,
     receptor_chains: str,
     ligand_chains: str,
+    input_pdb: Path,
 ) -> None:
     """Parse ref PDB and write GROMACS ndx with Receptor and Ligand groups.
 
     Protein atoms are first in a GROMACS topology (pdb2gmx puts protein before
     solvent/ions), so 1-based atom numbers in the protein-only reference PDB
     map directly to global atom numbers in the full system.
+
+    GROMACS RELABELS chains: pdb2gmx -merge no emits one molecule per input
+    chain and trjconv writes them as A, B, C… in molecule order — NOT the
+    original H/L/B letters. So we cannot match the user's receptor/ligand
+    chain letters directly against the reference PDB. Instead we map by
+    MOLECULE ORDER: the i-th distinct chain in the reference PDB corresponds to
+    the i-th distinct chain in the (original) input PDB. If the counts don't
+    line up we fall back to direct chain-letter matching (legacy behaviour).
     """
     rec_set = {c.strip().upper() for c in receptor_chains.split(",") if c.strip()}
     lig_set = {c.strip().upper() for c in ligand_chains.split(",") if c.strip()}
+
+    orig_order = _distinct_chain_order(input_pdb, protein_only=True)
+    ref_order = _distinct_chain_order(ref_pdb, protein_only=True)
+
+    # Build ref_chain -> role ('rec'|'lig') via positional (molecule-order) mapping.
+    role_by_ref: dict[str, str] = {}
+    if len(ref_order) == len(orig_order) and orig_order:
+        for ref_ch, orig_ch in zip(ref_order, orig_order):
+            if orig_ch in rec_set:
+                role_by_ref[ref_ch] = "rec"
+            elif orig_ch in lig_set:
+                role_by_ref[ref_ch] = "lig"
+        _progress(
+            f"  Chain map (GROMACS relabels): "
+            + ", ".join(f"{r}<-{o}" for r, o in zip(ref_order, orig_order))
+        )
+    else:
+        # Fallback: assume the reference PDB kept the original chain letters.
+        for ch in ref_order:
+            if ch in rec_set:
+                role_by_ref[ch] = "rec"
+            elif ch in lig_set:
+                role_by_ref[ch] = "lig"
 
     rec_atoms: list[int] = []
     lig_atoms: list[int] = []
@@ -113,20 +179,21 @@ def _create_chain_index(
                 idx = int(line[6:11])
             except ValueError:
                 continue
-            if chain in rec_set:
+            role = role_by_ref.get(chain)
+            if role == "rec":
                 rec_atoms.append(idx)
-            elif chain in lig_set:
+            elif role == "lig":
                 lig_atoms.append(idx)
 
     if not rec_atoms:
         raise ValueError(
-            f"No atoms found for receptor chains {rec_set} in {ref_pdb}. "
-            f"Available chains: check the reference PDB."
+            f"No atoms found for receptor chains {rec_set} (input chains {orig_order}, "
+            f"reference chains {ref_order}) in {ref_pdb}."
         )
     if not lig_atoms:
         raise ValueError(
-            f"No atoms found for ligand chains {lig_set} in {ref_pdb}. "
-            f"Available chains: check the reference PDB."
+            f"No atoms found for ligand chains {lig_set} (input chains {orig_order}, "
+            f"reference chains {ref_order}) in {ref_pdb}."
         )
 
     def _write_group(fh, name: str, atoms: list[int]) -> None:
@@ -367,6 +434,50 @@ def _prepare_complex_pdb(pdb_text: str, keep_explicit_waters: bool = False) -> s
     return "\n".join(result) + "\n"
 
 
+# ── Structure repair (PDBFixer) ────────────────────────────────────────────────
+
+def _repair_structure(pdb_in: Path, pdb_out: Path) -> bool:
+    """Add missing heavy atoms with PDBFixer so pdb2gmx doesn't choke on
+    incomplete side chains (LEU missing CG/CD, etc.) — common in crystal and
+    docking PDBs. Only completes partial residues (does NOT insert whole missing
+    residues, which would distort an artificial chain break). Returns True on
+    success; False if PDBFixer is unavailable so the caller falls back to the
+    unrepaired input.
+    """
+    if not Path(_PDBFIXER_PY).exists():
+        _progress(
+            "  ⚠ PDBFixer env not found — skipping repair "
+            "(pdb2gmx may fail on incomplete residues). "
+            "Set GROMACS_PDBFIXER_PYTHON to enable."
+        )
+        return False
+
+    script = (
+        "import sys\n"
+        "from pdbfixer import PDBFixer\n"
+        "from openmm.app import PDBFile\n"
+        "f = PDBFixer(filename=sys.argv[1])\n"
+        "f.findMissingResidues()\n"
+        "f.missingResidues = {}\n"            # only complete partial residues, don't add whole ones
+        "f.findNonstandardResidues()\n"
+        "f.replaceNonstandardResidues()\n"
+        "f.removeHeterogens(True)\n"          # keep water (non-water HETATM already stripped upstream)
+        "f.findMissingAtoms()\n"
+        "f.addMissingAtoms()\n"
+        "with open(sys.argv[2], 'w') as fh:\n"
+        "    PDBFile.writeFile(f.topology, f.positions, fh, keepIds=True)\n"
+    )
+    r = subprocess.run(
+        [_PDBFIXER_PY, "-c", script, str(pdb_in), str(pdb_out)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0 or not pdb_out.exists():
+        detail = (r.stderr or r.stdout or "")[-400:]
+        _progress(f"  ⚠ PDBFixer repair failed (using unrepaired input): {detail}")
+        return False
+    return True
+
+
 # ── MD pipeline steps ──────────────────────────────────────────────────────────
 
 def _generate_topology(
@@ -601,12 +712,18 @@ def _run_production(
 
     nt = _n_threads()
     t = temperature_k
-    nsteps = int(production_ns * 500_000)   # 0.002 ps step → 500k steps/ns
+    # 0.002 ps step → 500k steps/ns. GROMACS_PROD_STEPS overrides for smoke tests.
+    nsteps = _env_int("GROMACS_PROD_STEPS", int(production_ns * 500_000))
+    # Frame stride: aim for many frames even on short runs so MM/GBSA's
+    # standard-deviation statistics stay numerically stable (with only 1–2
+    # frames gmx_MMPBSA hits sqrt(negative) → "math domain error"). Capped at
+    # 5000 so long production runs keep their usual ~1000-frame output.
+    nstout = min(5000, max(1, nsteps // 50))
     mdp = work_dir / f"{job_name}_md.mdp"
     # Use reaction-field instead of PME to avoid conda-forge GROMACS PME bug
     mdp.write_text(
         f"integrator  = md\ndt          = 0.002\nnsteps      = {nsteps}\n"
-        f"cutoff-scheme = Verlet\nnstxout-compressed = 5000\n"
+        f"cutoff-scheme = Verlet\nnstxout-compressed = {nstout}\n"
         f"nstenergy   = 5000\nnstlog      = 5000\n"
         f"coulombtype = reaction-field\nrcoulomb    = 1.0\nrvdw        = 1.0\n"
         f"epsilon_rf  = 0\n"
@@ -879,24 +996,27 @@ def _md_convergence_stats(work_dir: Path, job_name: str, gmx: str) -> Dict:
     npt_edr = work_dir / f"{job_name}_npt.edr"
     md_edr  = work_dir / f"{job_name}_md.edr"
 
+    # Select energy terms by NAME, not by menu index — index numbering varies
+    # between GROMACS versions/builds (e.g. gmx 2026.1 has Temperature=15,
+    # Pressure=16), which produced nonsense values (negative temperatures) before.
     if nvt_edr.exists():
-        t = _extract_energy_stat(nvt_edr, work_dir, "16", gmx)   # Temperature
+        t = _extract_energy_stat(nvt_edr, work_dir, "Temperature", gmx)
         if t is not None:
             stats["nvt_avg_temperature_k"] = round(t, 2)
 
     if npt_edr.exists():
-        p = _extract_energy_stat(npt_edr, work_dir, "18", gmx)   # Pressure
+        p = _extract_energy_stat(npt_edr, work_dir, "Pressure", gmx)
         if p is not None:
             stats["npt_avg_pressure_bar"] = round(p, 3)
-        d = _extract_energy_stat(npt_edr, work_dir, "24", gmx)   # Density
+        d = _extract_energy_stat(npt_edr, work_dir, "Density", gmx)
         if d is not None:
             stats["npt_avg_density_kg_m3"] = round(d, 1)
 
     if md_edr.exists():
-        t = _extract_energy_stat(md_edr, work_dir, "16", gmx)
+        t = _extract_energy_stat(md_edr, work_dir, "Temperature", gmx)
         if t is not None:
             stats["prod_avg_temperature_k"] = round(t, 2)
-        e = _extract_energy_stat(md_edr, work_dir, "10", gmx)   # Potential
+        e = _extract_energy_stat(md_edr, work_dir, "Potential", gmx)
         if e is not None:
             stats["prod_avg_potential_energy_kj_mol"] = round(e, 1)
 
@@ -951,9 +1071,16 @@ def _run_pipeline(inputs: dict) -> dict:
         if keep_explicit_waters:
             _progress("  Explicit waters from SuperWater will be included in topology")
 
+        # [0/9] Repair missing heavy atoms (incomplete side chains) before pdb2gmx
+        _progress("\n[0/9] Repairing structure (PDBFixer: add missing heavy atoms)…")
+        fixed_path = work_dir / "input_complex_fixed.pdb"
+        topology_input = fixed_path if _repair_structure(pdb_path, fixed_path) else pdb_path
+        if topology_input is fixed_path:
+            _progress("  ✓ Structure repaired")
+
         # [1/9] Topology
         _progress("\n[1/9] Generating topology (pdb2gmx)…")
-        _generate_topology(work_dir, job_name, pdb_path, forcefield, water_model, gmx)
+        _generate_topology(work_dir, job_name, topology_input, forcefield, water_model, gmx)
         _progress("  ✓ Topology done")
 
         # [2/9] Box
@@ -982,16 +1109,16 @@ def _run_pipeline(inputs: dict) -> dict:
         _progress("  ✓ PBC whole done")
 
         # [6/9] NVT
-        nvt_ns = 1.0
-        nvt_steps = 500_000   # 1 ns at dt=0.002 ps
-        _progress(f"\n[6/9] NVT equilibration ({nvt_ns} ns at {temperature_k} K)…")
+        nvt_steps = _env_int("GROMACS_NVT_STEPS", 500_000)   # 1 ns at dt=0.002 ps
+        nvt_ns = nvt_steps * 0.002 / 1000.0
+        _progress(f"\n[6/9] NVT equilibration ({nvt_ns:.3g} ns at {temperature_k} K)…")
         _run_nvt(work_dir, job_name, temperature_k, nvt_steps, gmx)
         _progress("  ✓ NVT done")
 
         # [7/9] NPT
-        npt_ns = 1.0
-        npt_steps = 500_000
-        _progress(f"\n[7/9] NPT equilibration ({npt_ns} ns, C-rescale barostat)…")
+        npt_steps = _env_int("GROMACS_NPT_STEPS", 500_000)
+        npt_ns = npt_steps * 0.002 / 1000.0
+        _progress(f"\n[7/9] NPT equilibration ({npt_ns:.3g} ns, C-rescale barostat)…")
         _run_npt(work_dir, job_name, temperature_k, npt_steps, gmx)
         _progress("  ✓ NPT done")
 
@@ -1013,7 +1140,7 @@ def _run_pipeline(inputs: dict) -> dict:
         _progress("\n[9/9b] Building receptor/ligand index…")
         ref_pdb = work_dir / f"{job_name}_md_ref.pdb"
         ndx_path = work_dir / f"{job_name}_index.ndx"
-        _create_chain_index(ref_pdb, ndx_path, receptor_chains, ligand_chains)
+        _create_chain_index(ref_pdb, ndx_path, receptor_chains, ligand_chains, topology_input)
         _progress("  ✓ Index created")
 
         # [9c/9] Regenerate reference PDB (Receptor+Ligand only)

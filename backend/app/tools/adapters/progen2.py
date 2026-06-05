@@ -24,7 +24,9 @@ class ProGen2Adapter:
                 s = s.split("/")[0]
             return s
 
-        sequence    = _str("sequence") or _str("heavy_chain")
+        # Prefer heavy_chain (upstream edge) over sequence (node param) so that
+        # connecting sequence_input.out → progen2.in actually drives generation.
+        sequence    = _str("heavy_chain") or _str("sequence")
         light_chain = _str("light_chain")
         mode        = str(inputs.get("mode", "generate"))
         num_seqs    = min(int(inputs.get("num_sequences", 5)), _MAX_VARIANTS)

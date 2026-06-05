@@ -20,7 +20,8 @@ class Boltz2Adapter:
         self._cache = ToolCache(tool_id="boltz2", tool_version=spec.version)
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
-        sequence = str(inputs.get("sequence", "") or inputs.get("heavy_chain", "") or "").strip()
+        # Prefer heavy_chain (upstream edge) over sequence (node param) so wired pipelines win.
+        sequence = str(inputs.get("heavy_chain", "") or inputs.get("sequence", "") or "").strip()
         light_chain = str(inputs.get("light_chain", "") or "").strip()
         structure = str(inputs.get("structure", "") or "").strip()
         ligand_name = str(inputs.get("ligand_name", "LIG") or "LIG").strip()

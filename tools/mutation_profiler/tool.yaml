@@ -40,6 +40,10 @@ outputs:
     description: >
       Summary: {n_sequences, n_positions, top_mutations: [{pos, wt, mut, freq}, ...]}.
 
+  - name: original
+    type: fasta
+    description: Pass-through of the input wild-type sequence for downstream mutation_composer wiring.
+
 runtime:
   kind: local_python
   gpu: false

@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 
-from app.api import analysis, artifacts, compute, datasets, loop_runs, ml_analysis, pipelines, results, runs, sequences, tools, trained_models, workshop, ws
+from app.api import analysis, artifacts, compute, datasets, loop_runs, md_ground, md_ground_ws, ml_analysis, pipelines, reports, results, runs, sequences, tools, trained_models, workshop, ws
 from app.config import settings
 from app.db.models import Base, CustomToolRow, LoopRunRow, RunRow
 from app.db.session import AsyncSessionLocal, engine
@@ -250,6 +250,7 @@ app.add_middleware(
 app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
 app.include_router(pipelines.router, prefix="/api/pipelines", tags=["pipelines"])
 app.include_router(runs.router, prefix="/api/runs", tags=["runs"])
+app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 app.include_router(artifacts.router, prefix="/api/artifacts", tags=["artifacts"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 app.include_router(ml_analysis.router, prefix="/api/ml-analysis", tags=["ml-analysis"])
@@ -259,6 +260,8 @@ app.include_router(datasets.router, prefix="/api/datasets", tags=["datasets"])
 app.include_router(trained_models.router, prefix="/api/models", tags=["models"])
 app.include_router(loop_runs.router, prefix="/api/loop-runs", tags=["loop-runs"])
 app.include_router(workshop.router, prefix="/api/workshop", tags=["workshop"])
+app.include_router(md_ground.router, prefix="/api/md-ground", tags=["md-ground"])
+app.include_router(md_ground_ws.router, tags=["md-ground-ws"])
 app.include_router(ws.router, prefix="/ws", tags=["ws"])
 app.include_router(compute.router, prefix="/ws/compute", tags=["compute"])
 app.include_router(workshop.ws_router, tags=["workshop-ws"])

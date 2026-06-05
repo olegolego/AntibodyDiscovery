@@ -15,6 +15,16 @@ inputs:
 outputs:
   - name: result
     type: json
+    description: Value assigned to `result` in the code block
+  - name: stdout
+    type: json
+    description: Captured stdout from the code execution
+  - name: error
+    type: json
+    description: Traceback string if the code raised an exception, else null
+  - name: metadata
+    type: json
+    description: Injected variable names and other execution metadata
 
 runtime:
   kind: local_python

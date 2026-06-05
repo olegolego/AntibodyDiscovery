@@ -26,8 +26,10 @@ from app.tools.molecule_cache import (
 
 router = APIRouter()
 
-# Tools whose design_sequence rows are considered intermediate (not final results).
-_INTERMEDIATE_DESIGN_TOOLS = {"cdr_mutator"}
+# Tools whose design_sequence rows are considered intermediate when shown alongside
+# other result types (structures, docking). When a molecule has ONLY design sequences
+# (e.g. a CDR-only pipeline with no structure step), all design sequences are shown.
+_INTERMEDIATE_DESIGN_TOOLS: set[str] = set()
 
 
 def _scores(raw: str | None) -> dict:
@@ -48,16 +50,19 @@ def _has_structure():
 def _has_docking():
     return exists(select(DockingResultRow.id).where(DockingResultRow.molecule_id == MoleculeRow.id))
 
+def _has_design():
+    return exists(select(DesignSequenceRow.id).where(DesignSequenceRow.molecule_id == MoleculeRow.id))
+
 
 @router.get("/pipelines")
 async def list_pipelines_with_results() -> list[dict[str, Any]]:
-    """Return pipelines that have at least one scored molecule (structure or docking).
+    """Return pipelines that have at least one scored molecule (structure, docking, or design).
 
     Molecules whose pipeline_id is NULL are grouped under the sentinel
     pipeline_id '__uncategorized__' so old results are never hidden.
     """
     async with AsyncSessionLocal() as db:
-        scored_filter = _has_structure() | _has_docking()
+        scored_filter = _has_structure() | _has_docking() | _has_design()
 
         rows = (await db.execute(
             select(
@@ -112,8 +117,8 @@ async def list_molecules(
             else:
                 q = q.where(MoleculeRow.pipeline_id == pipeline_id)
 
-        # Scored-only: only molecules that have at least one structure or docking result
-        q = q.where(_has_structure() | _has_docking())
+        # Scored-only: molecules with at least one structure, docking, or design sequence
+        q = q.where(_has_structure() | _has_docking() | _has_design())
 
         rows = (await db.execute(q)).scalars().all()
 

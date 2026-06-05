@@ -45,6 +45,15 @@ inputs:
       saturation: enumerates all 19 single-point substitutions at every selected
         CDR position (num_mutations / num_variants are ignored).
 
+  - name: cdr_target
+    type: str
+    required: false
+    default: ""
+    description: >
+      Single CDR to mutate, e.g. "CDR_H3" or "H3". When set, overrides the individual
+      cdr_h1…cdr_l3 checkboxes. Wire directly from an RL agent's top_cdr output.
+      Leave empty to use the individual CDR checkbox settings.
+
   - name: cdr_h1
     type: bool
     required: false

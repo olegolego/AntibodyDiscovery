@@ -15,11 +15,6 @@ inputs:
     required: true
     default: ""
     description: Protein structure with ligand present (from Boltz2 or other predictor)
-  - name: ligand
-    type: str
-    required: false
-    default: "LIG"
-    description: Residue name of the ligand in the PDB
   - name: num_sequences
     type: int
     required: false

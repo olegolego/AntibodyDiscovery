@@ -70,7 +70,7 @@ async def predict(req: PredictRequest):
     if not seq:
         raise HTTPException(status_code=400, detail="sequence is required")
 
-    tokenized = _tokenizer([seq], return_tensors="pt", add_special_tokens=False)
+    tokenized = _tokenizer(seq, return_tensors="pt", add_special_tokens=False)
     if torch.cuda.is_available():
         tokenized = {k: v.cuda() for k, v in tokenized.items()}
 

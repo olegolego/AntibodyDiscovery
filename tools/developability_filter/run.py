@@ -437,6 +437,17 @@ def _parse_variants(inp: dict[str, Any]) -> list[dict[str, Any]]:
             if vh and vh not in seen:
                 seen.add(vh)
                 out.append({"vh": vh, "vl": vl})
+    if out:
+        return out
+
+    # Single VH/VL pair — what loop_start, sequence_input and sequence_db emit.
+    # Assess it as a one-element batch so the filter works when wired directly to
+    # a sequence source (not only to a variant-generating design node).
+    single_vh = str(inp.get("heavy_chain") or inp.get("vh") or "").strip().upper()
+    single_vl = str(inp.get("light_chain") or inp.get("vl") or "").strip().upper()
+    if single_vh:
+        return [{"vh": single_vh, "vl": single_vl}]
+
     return out
 
 

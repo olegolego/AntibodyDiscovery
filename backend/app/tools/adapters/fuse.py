@@ -27,6 +27,26 @@ class FuseAdapter:
                 raw_seqs = json.loads(raw_seqs)
             except Exception:
                 pass
+
+        # Accept upstream heavy_chain / light_chain when 'sequences' is not wired explicitly
+        if not isinstance(raw_seqs, list) or len(raw_seqs) < 2:
+            domain_seqs: list[str] = []
+            for key in ("heavy_chain", "light_chain"):
+                v = str(inputs.get(key, "")).strip()
+                if v:
+                    domain_seqs.append(v)
+            # Also collect variant_1..N from cdr_mutator upstream
+            for i in range(1, 10):
+                v = inputs.get(f"variant_{i}")
+                if v is None:
+                    break
+                seq = v.get("heavy_chain", "").strip() if isinstance(v, dict) else str(v).strip()
+                if seq:
+                    domain_seqs.append(seq)
+            if len(domain_seqs) >= 2:
+                raw_seqs = domain_seqs
+                inputs = {**inputs, "sequences": domain_seqs}
+
         n_seqs = len(raw_seqs) if isinstance(raw_seqs, list) else "?"
         linker = str(inputs.get("linker", "GSG"))
         name = str(inputs.get("name", "fusion"))

@@ -20,8 +20,18 @@ class DNAEncoderAdapter:
         self._cache = ToolCache(tool_id="dna_encoder", tool_version=spec.version)
 
     async def invoke(self, inputs: dict[str, Any], run_ctx: RunContext) -> dict[str, Any]:
+        # Accept upstream heavy_chain / light_chain when 'sequence' is not wired explicitly
+        if not str(inputs.get("sequence", "")).strip():
+            parts = []
+            for key in ("heavy_chain", "light_chain"):
+                v = str(inputs.get(key, "")).strip()
+                if v:
+                    parts.append(f">{key}\n{v}")
+            if parts:
+                inputs = {**inputs, "sequence": "\n".join(parts)}
+
         organism = str(inputs.get("organism", "EC")).upper()
-        n_seqs = inputs.get("sequence", "").count(">") or 1
+        n_seqs = str(inputs.get("sequence", "")).count(">") or 1
 
         await run_ctx.alog(f"DNA Encoder: organism={organism}, ~{n_seqs} sequence(s)")
 

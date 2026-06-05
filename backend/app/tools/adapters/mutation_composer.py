@@ -24,6 +24,18 @@ class MutationComposerAdapter:
         mode = str(inputs.get("mode", "weighted_random")).strip()
         max_mutations = int(inputs.get("max_mutations", 3))
 
+        # Accept upstream heavy_chain when 'original' is not wired explicitly
+        if not original:
+            original = str(inputs.get("heavy_chain", "")).strip()
+
+        # Accept mutation_profiler's output ports when 'frequencies' is not wired
+        if not frequencies:
+            for key in ("relative_frequencies", "absolute_frequencies"):
+                v = inputs.get(key)
+                if v:
+                    frequencies = v
+                    break
+
         if not original:
             raise ValueError("mutation_composer requires 'original' sequence")
 

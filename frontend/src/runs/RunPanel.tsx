@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, X, FlaskConical, Square, FileBarChart, RefreshCw, Database, PlayCircle } from "lucide-react";
+import { ChevronDown, ChevronRight, X, FlaskConical, Square, FileBarChart, RefreshCw, Database, PlayCircle, Bug } from "lucide-react";
+import { FeedbackModal } from "@/feedback/FeedbackModal";
 import { useRunWebSocket } from "@/hooks/useRunWebSocket";
 import { useCanvasStore } from "@/canvas/store";
 import { createDatasetFromRun, listDatasets } from "@/api/datasets";
@@ -241,6 +242,7 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
   const [run, setRun] = useState<Run | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [continuingLoop, setContinuingLoop] = useState(false);
+  const [showBugReport, setShowBugReport] = useState(false);
   const setRunNodeStatuses = useCanvasStore((s) => s.setRunNodeStatuses);
   const setRunNodeOutputs = useCanvasStore((s) => s.setRunNodeOutputs);
   const runNodeStatuses = useCanvasStore((s) => s.runNodeStatuses);
@@ -371,33 +373,48 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
-        <span className="text-sm font-bold text-white">
+      {showBugReport && runId && (
+        <FeedbackModal mode="run-bug" runId={runId} onClose={() => setShowBugReport(false)} />
+      )}
+      <div className="flex flex-wrap items-center justify-between gap-y-2 px-4 py-3 border-b border-border shrink-0">
+        <span className="text-sm font-bold text-white shrink-0 mr-2">
           {isLoop ? "Loop Run" : "Run Status"}
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2 min-w-0">
+          {runId && (
+            <button
+              onClick={() => setShowBugReport(true)}
+              title="Report a problem with this run — attaches the failed node, error, logs and inputs for Claude to fix"
+              className="flex items-center justify-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium whitespace-nowrap shrink-0
+                text-amber-300 bg-amber-950/40 border border-amber-800/40 hover:bg-amber-900/40
+                hover:text-amber-200 transition-colors"
+            >
+              <Bug size={11} />
+              Report Bug
+            </button>
+          )}
           {!isLoop && (run?.status === "succeeded" || run?.status === "failed") && onViewReport && runId && (
             <button
               onClick={() => onViewReport(runId)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
+              className="flex items-center justify-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium whitespace-nowrap shrink-0
                 text-slate-300 bg-white/5 border border-border hover:bg-white/10 hover:text-white
                 transition-colors"
             >
-              <FileBarChart size={10} />
+              <FileBarChart size={11} />
               Report
             </button>
           )}
           {canSave && (
             <button
               onClick={() => { setShowSave((v) => !v); setSaveResult(null); setSaveError(""); }}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
+              className={`flex items-center justify-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium whitespace-nowrap shrink-0
                 transition-colors border
                 ${showSave
                   ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300"
                   : "text-slate-300 bg-white/5 border-border hover:bg-white/10 hover:text-white"
                 }`}
             >
-              <Database size={10} />
+              <Database size={11} />
               Dataset
             </button>
           )}
@@ -405,7 +422,7 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
             <button
               onClick={handleStop}
               disabled={cancelling}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
+              className="flex items-center justify-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium whitespace-nowrap shrink-0
                 bg-red-950/60 border border-red-800/50 text-red-400 hover:bg-red-900/60
                 hover:text-red-300 transition-colors disabled:opacity-60"
             >
@@ -419,7 +436,7 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
             <button
               onClick={handleCancelLoop}
               disabled={cancelling}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
+              className="flex items-center justify-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium whitespace-nowrap shrink-0
                 bg-red-950/60 border border-red-800/50 text-red-400 hover:bg-red-900/60
                 hover:text-red-300 transition-colors disabled:opacity-60"
             >
@@ -434,7 +451,7 @@ export function RunPanel({ runId, loopRunId, loopData, onSelectIteration, onClos
             <button
               onClick={handleContinueLoop}
               disabled={continuingLoop}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium
+              className="flex items-center justify-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium whitespace-nowrap shrink-0
                 bg-emerald-950/60 border border-emerald-800/50 text-emerald-400 hover:bg-emerald-900/60
                 hover:text-emerald-300 transition-colors disabled:opacity-60"
               title="Continue this loop from where it stopped"

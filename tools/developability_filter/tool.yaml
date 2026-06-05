@@ -18,6 +18,19 @@ inputs:
       …) are preserved on passing variants in the output. This is the preferred
       input — wire from any tool that emits a sequences output.
 
+  # ── Single VH/VL pair (e.g. from Loop Start, Sequence Input/Library) ──────
+  - name: heavy_chain
+    type: text
+    required: false
+    description: >
+      A single VH sequence. Wire from Loop Start / Sequence Input to assess one
+      antibody directly (treated as a one-variant batch). Use `sequences` for
+      batches from a design/mutation node.
+  - name: light_chain
+    type: text
+    required: false
+    description: "A single VL sequence, paired with heavy_chain."
+
   # ── Legacy inputs (kept for backward-compat) ─────────────────────────────
   - name: heavy_chain_variants
     type: json

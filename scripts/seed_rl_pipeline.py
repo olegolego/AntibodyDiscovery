@@ -1,37 +1,31 @@
-"""Seed the RL Informed Mutation pipeline template.
+"""Seed the RL Informed Mutation (Docking) pipeline template.
 
 Usage:
     cd backend && .venv/bin/python ../scripts/seed_rl_pipeline.py
 
 Pipeline (loop, 10 iterations)
 ────────────────────────────────
- 1  loop_start      — entry sequence (VH), patched each iteration with the selected variant
- 2  abmap           — AbMAP 252d embedding of the current sequence (state for RL)
- 3  rl_designer     — DQN policy: receives embedding as state, outputs (CDR, strategy, n_mut)
-                      policy_state (Q-net weights + replay buffer) accumulated across iterations
- 4  cdr_mutator     — executes the chosen action: mutates the CDR with the chosen strategy
- 5  immunebuilder   — predict structure for the best CDR variant
- 6  haddock3        — dock against the antigen; score feeds back as reward
- 7  loop_end        — compute node: pick best variant by haddock score → next_heavy_chain
+ 1  loop_start      — entry VH+VL, patched each iteration with the selected variant
+ 2  target_input    — antigen PDB (spike RBD default; wire to HADDOCK3)
+ 3  abmap_state     — AbMAP 252-d embedding of current VH+VL (RL state)
+ 4  rl_agent        — DQN: state → (CDR, strategy, n_mut)
+                      policy_state accumulated across iterations
+                      reward_signals injected by loop_executor from previous
+                      iteration's HADDOCK3 score (one-step lag)
+ 5  cdr_mutate      — execute RL-chosen action (CDR + strategy + n_mutations)
+ 6  immunebuilder   — predict structure for the best CDR variant
+ 7  haddock3        — dock against the antigen; score feeds back as reward
+ 8  loop_end        — select best variant by HADDOCK score → next_heavy_chain + next_light_chain
 
-Loop: 10 iterations. On iteration 0 the RL agent explores randomly (ε=1.0). From iteration 1
-onwards it trains on the growing replay buffer and decays ε toward exploitation.
-The HADDOCK3 docking score (lower is better) is used as the reward signal.
+Loop: 10 iterations.  On iteration 0 the RL agent explores randomly (ε=1.0).
+From iteration 1 onwards the executor injects the previous HADDOCK score as
+reward_signals and the agent trains on the growing replay buffer.
 
-RL state
-──────────
-AbMAP 252d embedding of the current (evaluated) sequence. This gives the policy a compact,
-CDR-aware representation of the antibody.
-
-RL action
-──────────
-(CDR_H3, blosum62, 2 mutations) as the default starting point — |A| = 6*2*2 = 24 discrete
-actions (3 CDRs × 2 strategies × 2 n_mutations).  All hypers are visible in the RL Designer
-and can be changed without editing this script.
-
-Reward
-──────────
-HADDOCK3 docking score (lower is better, sign-flipped internally by rl_designer).
+RL state  : AbMAP 252-d CDR-aware embedding of the current evaluated sequence.
+RL action : 3 CDRs × 2 strategies × 2 n_mutations = 12 actions.
+            top_cdr → cdr_mutate.cdr_target (only the selected CDR is mutated).
+Reward    : HADDOCK3 docking score (lower is better; loop_executor sign-flips
+            internally via lower_is_better=True, normalization=none).
 """
 from __future__ import annotations
 
@@ -56,7 +50,17 @@ def edge(src: str, src_port: str, tgt: str, tgt_port: str) -> dict:
     return {"source": f"{src}.{src_port}", "target": f"{tgt}.{tgt_port}"}
 
 
-# ── Default RLSpec ────────────────────────────────────────────────────────────
+# ── Seed sequences ─────────────────────────────────────────────────────────────
+# VH3-23 / Vk1-39 anti-spike Fab scaffold (IMGT numbering)
+SEED_VH = (
+    "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS"
+)
+SEED_VL = (
+    "DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK"
+)
+
+# ── RL spec ─────────────────────────────────────────────────────────────────────
+# 3 CDRs × 2 strategies × 2 n_mutations = 12 discrete actions
 DEFAULT_RL_SPEC = {
     "version": "1.0",
     "state": {
@@ -75,8 +79,10 @@ DEFAULT_RL_SPEC = {
             {
                 "port": "haddock_score",
                 "weight": 1.0,
-                "lower_is_better": True,
-                "normalization": "z_score",
+                "lower_is_better": True,    # lower HADDOCK score = better binding
+                # normalization=none: HADDOCK scores typically range -200 to 0;
+                # z_score with 1 sample per iteration produces reward=0 always.
+                "normalization": "none",
             }
         ],
         "shaping": "sparse",
@@ -101,41 +107,48 @@ DEFAULT_RL_SPEC = {
 }
 
 # ── Loop-end compute code ─────────────────────────────────────────────────────
-LOOP_END_CODE = '''
-# Select the CDR variant with the best (lowest) HADDOCK score.
-# Variables injected by loop_end adapter (use them directly, no "inputs" dict):
-#   haddock3_score         — dict {seq_id: float} or scalar
-#   rl_recommended_actions — list from rl_designer (for logging)
-#   loop_start_heavy_chain — current seed sequence
-#   loop_history           — list of previous iterations (injected automatically)
-#   loop_iteration         — current 0-based iteration index
+LOOP_END_CODE = '''\
+# Variable names = {source_node_id}_{output_key}  (target port names are IGNORED)
+# Node IDs: loop_start="loop_start", haddock="haddock_r1", rl="rl_agent"
+# Auto-injected: loop_history, loop_iteration
 
-score_raw = locals().get("haddock3_score") or {}
+score_raw = locals().get("haddock_r1_scores") or {}
 if isinstance(score_raw, (int, float)):
     score_raw = {"seq_0": score_raw}
+if isinstance(score_raw, dict) and "score" in score_raw:
+    score_raw = {"seq_0": float(score_raw["score"])}
 if not isinstance(score_raw, dict):
     score_raw = {}
 
-# Select the variant with the lowest docking score
+fallback_vh = (locals().get("loop_start_heavy_chain") or "").strip()
+fallback_vl = (locals().get("loop_start_light_chain") or "").strip()
+
 if score_raw:
     best_seq = min(score_raw, key=lambda k: score_raw[k])
     best_score = score_raw[best_seq]
 else:
-    best_seq = locals().get("loop_start_heavy_chain", "") or ""
+    best_seq = fallback_vh
     best_score = None
 
-# Log what the RL agent recommended
-rl_actions = locals().get("rl_recommended_actions") or []
+# RL action logging
+rl_actions = locals().get("rl_agent_recommended_actions") or []
 if rl_actions:
     top = rl_actions[0]
-    print(f"RL agent chose {top.get('cdr')}/{top.get('strategy')}/{top.get('n_mutations')}mut "
-          f"({'explore' if top.get('exploratory') else 'exploit'}, Q={top.get('q_value', 0):.3f})")
+    print(
+        f"[iter {loop_iteration}]  RL  "
+        f"{top.get('cdr','?')}/{top.get('strategy','?')}/{top.get('n_mutations','?')}mut  "
+        f"Q={top.get('q_value', 0.0):.3f}  "
+        f"({'explore' if top.get('exploratory') else 'exploit'})"
+    )
 
-print(f"Iteration {locals().get('loop_iteration', 0)}: best_seq={best_seq!r}, best_score={best_score}")
+print(f"[iter {loop_iteration}]  best_seq={best_seq[:20]!r}…  best_score={best_score}")
 
 result = {
-    "next_heavy_chain": best_seq,
+    "next_heavy_chain": best_seq if best_seq and best_seq != fallback_vh else fallback_vh,
+    "next_light_chain": fallback_vl,  # VL unchanged — CDR mutator handles VH CDRs
     "best_score": best_score,
+    "vh": best_seq or fallback_vh,
+    "vl": fallback_vl,
 }
 '''
 
@@ -146,78 +159,95 @@ async def seed() -> None:
 
     # Node IDs
     n_loop_start = "loop_start"
-    n_abmap = "abmap_state"
-    n_rl = "rl_agent"
-    n_cdr = "cdr_mutate"
-    n_immunebuilder = "immunebuilder_r1"
-    n_haddock = "haddock_r1"
-    n_loop_end = "loop_end"
+    n_target     = "target_input"
+    n_abmap      = "abmap_state"
+    n_rl         = "rl_agent"
+    n_cdr        = "cdr_mutate"
+    n_immune     = "immunebuilder_r1"
+    n_haddock    = "haddock_r1"
+    n_loop_end   = "loop_end"
 
     pipeline_data = {
-        "id": f"rl-informed-mutation-{uid()}",
-        "name": "RL Informed Mutation (Loop)",
+        "id": f"rl-docking-mutation-{uid()}",
+        "name": "RL Informed Mutation (Docking Loop)",
         "schema_version": "1",
         "nodes": [
+            # ── 1. Loop entry — VH + VL ───────────────────────────────────────
             node(n_loop_start, "loop_start", {
-                "heavy_chain": "EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS",
-                "light_chain": "",
+                "heavy_chain": SEED_VH,
+                "light_chain": SEED_VL,
                 "max_iterations": 10,
-            }, 50, 300),
+            }, 50, 320),
 
+            # ── 2. Antigen target (spike RBD default) ─────────────────────────
+            # Change target in the canvas to dock against a different antigen.
+            node(n_target, "target_input", {}, 50, 120),
+
+            # ── 3. AbMAP embedding (RL state) ─────────────────────────────────
             node(n_abmap, "abmap", {
                 "task": "structure",
-                "model_size": "8M",
             }, 320, 200),
 
+            # ── 4. RL DQN policy (12 actions) ─────────────────────────────────
+            # reward_signals = {haddock_score: {vh: score}} injected by loop_executor
             node(n_rl, "rl_designer", {
                 "rl_spec": DEFAULT_RL_SPEC,
                 "mode": "train_and_act",
                 "top_k": 4,
             }, 560, 200),
 
+            # ── 5. CDR mutator: execute RL-chosen CDR + strategy + n_mut ──────
             node(n_cdr, "cdr_mutator", {
                 "num_variants": 4,
-                # strategy/CDR wired from rl_designer outputs
                 "seed": None,
             }, 800, 200),
 
-            node(n_immunebuilder, "immunebuilder", {}, 1050, 200),
+            # ── 6. Structure prediction ────────────────────────────────────────
+            node(n_immune, "immunebuilder", {}, 1050, 200),
 
+            # ── 7. Docking score (RL reward) ───────────────────────────────────
             node(n_haddock, "haddock3", {
-                "antigen_active_residues": "",
+                "antigen_active_residues": (
+                    "438 439 440 441 442 443 444 445 446 447 448 449 450 451 452 453 454 455 "
+                    "456 457 458 459 460 461 462 463 464 465 466 467 468 469 470 471 472 473 "
+                    "474 475 476 477 478 479 480 481 482 483 484 485 486 487 488 489 490 491 "
+                    "492 493 494 495 496 497 498 499 500 501 502 503 504 505 506"
+                ),
             }, 1300, 200),
 
+            # ── 8. Select best variant; store score for next-iteration reward ──
             node(n_loop_end, "loop_end", {
                 "code": LOOP_END_CODE,
-            }, 1050, 420),
+            }, 1050, 450),
         ],
         "edges": [
-            # Sequence → AbMAP embedding (state)
+            # ── AbMAP state: embed VH + VL ─────────────────────────────────────
             edge(n_loop_start, "heavy_chain", n_abmap, "vh"),
+            edge(n_loop_start, "light_chain", n_abmap, "vl"),
 
-            # AbMAP results → RL agent (state)
+            # ── RL agent: embedding as state ───────────────────────────────────
+            # reward_signals injected by loop_executor (NOT an edge — no cycle)
             edge(n_abmap, "results", n_rl, "state_embeddings"),
 
-            # RL agent top action → CDR mutator params
-            edge(n_rl, "top_strategy", n_cdr, "strategy"),
-
-            # Seed sequence → CDR mutator
+            # ── CDR mutator: RL-chosen action ──────────────────────────────────
+            edge(n_rl, "top_cdr",         n_cdr, "cdr_target"),
+            edge(n_rl, "top_strategy",    n_cdr, "strategy"),
+            edge(n_rl, "top_n_mutations", n_cdr, "num_mutations"),
             edge(n_loop_start, "heavy_chain", n_cdr, "heavy_chain"),
+            edge(n_loop_start, "light_chain", n_cdr, "light_chain"),
 
-            # CDR mutator variants → ImmuneBuilder
-            edge(n_cdr, "variant_1", n_immunebuilder, "heavy_chain"),
+            # ── Structure prediction: variant_1 ───────────────────────────────
+            edge(n_cdr, "variant_1", n_immune, "heavy_chain"),
 
-            # ImmuneBuilder → HADDOCK3
-            edge(n_immunebuilder, "structure_1", n_haddock, "antibody"),
+            # ── Docking ────────────────────────────────────────────────────────
+            edge(n_immune,  "structure_1", n_haddock, "antibody"),
+            edge(n_target,  "target",      n_haddock, "antigen"),
 
-            # HADDOCK3 score → loop_end (for sequence selection)
-            edge(n_haddock, "scores", n_loop_end, "haddock3_score"),
-
-            # RL recommended actions → loop_end (for logging)
-            edge(n_rl, "recommended_actions", n_loop_end, "rl_recommended_actions"),
-
-            # Seed sequence → loop_end (fallback)
-            edge(n_loop_start, "heavy_chain", n_loop_end, "loop_start_heavy_chain"),
+            # ── Loop-end ───────────────────────────────────────────────────────
+            edge(n_haddock,    "scores",             n_loop_end, "haddock_scores"),
+            edge(n_rl,         "recommended_actions", n_loop_end, "rl_recommended_actions"),
+            edge(n_loop_start, "heavy_chain",         n_loop_end, "seed_vh"),
+            edge(n_loop_start, "light_chain",         n_loop_end, "seed_vl"),
         ],
     }
 
@@ -237,14 +267,25 @@ async def seed() -> None:
         )
         db.add(row)
         await db.commit()
-        print(f"✓ Seeded pipeline: {pipeline.name!r} ({pipeline.id})")
-        print(f"  Nodes : {len(pipeline.nodes)}")
-        print(f"  Edges : {len(pipeline.edges)}")
-        print(f"  RL spec action count: "
-              f"{len(DEFAULT_RL_SPEC['action']['cdrs'])} CDRs × "
-              f"{len(DEFAULT_RL_SPEC['action']['strategies'])} strategies × "
-              f"{len(DEFAULT_RL_SPEC['action']['n_mutations_choices'])} n_mut = "
-              f"{len(DEFAULT_RL_SPEC['action']['cdrs']) * len(DEFAULT_RL_SPEC['action']['strategies']) * len(DEFAULT_RL_SPEC['action']['n_mutations_choices'])} actions")
+
+        spec = DEFAULT_RL_SPEC["action"]
+        n_actions = (
+            len(spec["cdrs"])
+            * len(spec["strategies"])
+            * len(spec["n_mutations_choices"])
+        )
+        alg = DEFAULT_RL_SPEC["algorithm"]
+        print(f"✓  Seeded: {pipeline.name!r}  ({pipeline.id})")
+        print(f"   Nodes       : {len(pipeline.nodes)}")
+        print(f"   Edges       : {len(pipeline.edges)}")
+        print(f"   Iterations  : 10")
+        print(f"   RL actions  : {n_actions}  "
+              f"({len(spec['cdrs'])} CDRs × {len(spec['strategies'])} strategies × "
+              f"{len(spec['n_mutations_choices'])} n_mut)")
+        print(f"   RL warmup   : {alg['warmup_steps']} iters")
+        print(f"   RL exploit  : starts iter {alg['warmup_steps']}")
+        print(f"   Reward      : HADDOCK3 docking score (lower is better)")
+        print(f"   Target      : spike RBD (edit target_input node to change)")
 
 
 if __name__ == "__main__":

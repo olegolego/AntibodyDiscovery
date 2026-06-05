@@ -308,6 +308,38 @@ class BenchmarkRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+# ── MD Ground (molecular-dynamics sandbox) ─────────────────────────────────────
+
+class MDSimulationRow(Base):
+    """A saved MD Ground simulation: its SystemSpec, status and run summary.
+
+    Trajectories are NOT stored here — frames are ephemeral over WebSocket. An
+    optional decimated trajectory may be persisted to disk under PDP_RUN_LOG_DIR.
+    """
+    __tablename__ = "md_simulations"
+
+    id:         Mapped[str]      = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name:       Mapped[str]      = mapped_column(String(255), nullable=False, default="Untitled simulation")
+    spec:       Mapped[str]      = mapped_column(Text, nullable=False)                 # JSON SystemSpec
+    status:     Mapped[str]      = mapped_column(String(20), nullable=False, default="draft")  # draft|running|done|error|cancelled
+    summary:    Mapped[str|None] = mapped_column(Text, nullable=True)                  # JSON Summary
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MDForceScriptRow(Base):
+    """A reusable custom force law: a formula U(r) or a Python force function."""
+    __tablename__ = "md_force_scripts"
+
+    id:         Mapped[str]      = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name:       Mapped[str]      = mapped_column(String(255), nullable=False)
+    kind:       Mapped[str]      = mapped_column(String(16), nullable=False, default="formula")  # formula|python
+    body:       Mapped[str]      = mapped_column(Text, nullable=False)
+    description:Mapped[str|None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class LoopRunRow(Base):
     """Coordinator for a multi-iteration loop run. Each iteration is a regular RunRow."""
     __tablename__ = "loop_runs"
