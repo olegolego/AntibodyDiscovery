@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Plus, Target, Trash2, Upload } from "lucide-react";
-import { addTarget, getPreset, importPDB, listPresets } from "./api";
+import { Atom, Loader2, Plus, Target, Trash2, Upload } from "lucide-react";
+import { addTarget, getPreset, importDocking, importPDB, listDockingRuns, listPresets, type DockingRun } from "./api";
 import { useMDStore } from "./store";
 import { FormulaInput } from "./FormulaInput";
 import { PythonForceEditor } from "./PythonForceEditor";
@@ -48,17 +48,35 @@ export function ControlPanel() {
   const view = useMDStore((s) => s.view);
   const toggleView = useMDStore((s) => s.toggleView);
   const [presets, setPresets] = useState<PresetMeta[]>([]);
+  const [dockingRuns, setDockingRuns] = useState<DockingRun[]>([]);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const targetRef = useRef<HTMLInputElement | null>(null);
   const [pdbStatus, setPdbStatus] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [addingTarget, setAddingTarget] = useState(false);
+  const [loadingDock, setLoadingDock] = useState(false);
 
   const hasStructure = !!(spec.positions && spec.positions.length > 0);
 
   useEffect(() => {
     listPresets().then(setPresets).catch(() => {});
+    listDockingRuns().then(setDockingRuns).catch(() => {});
   }, []);
+
+  async function openDocking(id: string) {
+    if (!id) return;
+    setLoadingDock(true);
+    setPdbStatus(null);
+    try {
+      const out = await importDocking(id);
+      patchSpec(out.spec);
+      setPdbStatus(`Opened complex: ${out.n_antibody} antibody (indigo) + ${out.n_antigen} antigen (amber) atoms`);
+    } catch (err) {
+      setPdbStatus(`Error: ${(err as Error).message}`);
+    } finally {
+      setLoadingDock(false);
+    }
+  }
 
   async function onPdbFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -140,7 +158,7 @@ export function ControlPanel() {
       </Section>
 
       <Section title="Structure (PDB)">
-        <input ref={fileRef} type="file" accept=".pdb,.ent,.cif" onChange={onPdbFile} className="hidden" />
+        <input ref={fileRef} type="file" accept=".pdb,.ent,.cif,.gro" onChange={onPdbFile} className="hidden" />
         <button
           onClick={() => fileRef.current?.click()}
           disabled={importing}
@@ -149,7 +167,7 @@ export function ControlPanel() {
           {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
           {importing ? "Importing…" : "Load PDB file"}
         </button>
-        <input ref={targetRef} type="file" accept=".pdb,.ent,.cif" onChange={onTargetFile} className="hidden" />
+        <input ref={targetRef} type="file" accept=".pdb,.ent,.cif,.gro" onChange={onTargetFile} className="hidden" />
         <button
           onClick={() => targetRef.current?.click()}
           disabled={addingTarget || !hasStructure}
@@ -165,8 +183,28 @@ export function ControlPanel() {
           </p>
         )}
         <p className="text-[10px] text-slate-600 leading-snug">
-          Builds an elastic-network model: atoms become particles, nearby pairs become harmonic springs. Large structures coarse-grain to Cα.
+          Builds an elastic-network model: atoms become particles, nearby pairs become harmonic springs. Large structures coarse-grain to Cα. Accepts <span className="text-slate-500">.pdb</span> and GROMACS <span className="text-slate-500">.gro</span>.
           <br />Add a target to place a second protein beside it (non-overlapping, distinctly coloured) with a Lennard-Jones term so they can drift together into an approximate binding pose.
+        </p>
+      </Section>
+
+      <Section title="Open a docking run">
+        <select
+          onChange={(e) => openDocking(e.target.value)}
+          defaultValue=""
+          disabled={loadingDock}
+          className="w-full bg-canvas border border-border rounded-md px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-indigo-500/60 disabled:opacity-50"
+        >
+          <option value="">{loadingDock ? "Opening…" : `Pick a complex (${dockingRuns.length})…`}</option>
+          {dockingRuns.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.tool_id} · {d.antigen_label} · {new Date(d.created_at).toLocaleDateString()}
+            </option>
+          ))}
+        </select>
+        <p className="text-[10px] text-slate-600 leading-snug flex items-center gap-1">
+          <Atom size={11} className="shrink-0" />
+          Loads a docked complex split into <span className="text-indigo-400">antibody</span> + <span className="text-amber-400">antigen</span>, each held by its own elastic network, with an interface Lennard-Jones term to relax the binding.
         </p>
       </Section>
 

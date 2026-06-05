@@ -11,9 +11,19 @@ responsive.
 """
 from __future__ import annotations
 
+from difflib import SequenceMatcher
+
 import numpy as np
 
 from .spec import Bond, Box, ForceTerm, ParticleType, StreamConfig, SystemSpec
+
+# 3-letter → 1-letter residue codes for reading chain sequences from a PDB.
+_AA3TO1 = {
+    "ALA": "A", "ARG": "R", "ASN": "N", "ASP": "D", "CYS": "C", "GLN": "Q",
+    "GLU": "E", "GLY": "G", "HIS": "H", "ILE": "I", "LEU": "L", "LYS": "K",
+    "MET": "M", "PHE": "F", "PRO": "P", "SER": "S", "THR": "T", "TRP": "W",
+    "TYR": "Y", "VAL": "V", "MSE": "M", "SEC": "U", "PYL": "O",
+}
 
 # element → (mass amu, viz radius Å, CPK-ish colour)
 _ELEMENTS: dict[str, tuple[float, float, str]] = {
@@ -79,14 +89,61 @@ def parse_pdb(text: str) -> tuple[list[tuple[float, float, float]], list[str], l
     return coords, elements, is_ca
 
 
+def parse_gro(text: str) -> tuple[list[tuple[float, float, float]], list[str], list[bool]]:
+    """Parse a GROMACS .gro coordinate file. Positions are in nm → converted to Å.
+
+    Fixed-format columns: residue name [5:10], atom name [10:15], then x/y/z in
+    8.3f fields starting at column 20 (nm). The second line is the atom count.
+    """
+    lines = text.splitlines()
+    if len(lines) < 3:
+        raise PDBImportError("GRO file too short")
+    try:
+        n = int(lines[1].strip())
+    except ValueError:
+        raise PDBImportError("GRO second line is not an atom count")
+    coords: list[tuple[float, float, float]] = []
+    elements: list[str] = []
+    is_ca: list[bool] = []
+    for line in lines[2 : 2 + n]:
+        if len(line) < 44:
+            continue
+        atom_name = line[10:15].strip()
+        try:
+            x = float(line[20:28]) * 10.0  # nm → Å
+            y = float(line[28:36]) * 10.0
+            z = float(line[36:44]) * 10.0
+        except ValueError:
+            continue
+        coords.append((x, y, z))
+        elements.append(_element_of(atom_name, ""))
+        is_ca.append(atom_name == "CA")
+    if not coords:
+        raise PDBImportError("No atoms parsed from GRO file")
+    return coords, elements, is_ca
+
+
+def _parse_structure(text: str):
+    """Dispatch on file format: PDB (ATOM/HETATM records) vs GROMACS .gro."""
+    head = text.lstrip()[:6]
+    if head.startswith(("ATOM", "HETATM")) or "\nATOM" in text[:4000] or "\nHETATM" in text[:4000]:
+        return parse_pdb(text)
+    # GRO: second line is a bare integer atom count.
+    lines = text.splitlines()
+    if len(lines) >= 2 and lines[1].strip().isdigit():
+        return parse_gro(text)
+    # Default to PDB parsing (raises a clear error if there are no records).
+    return parse_pdb(text)
+
+
 def build_enm_spec(
     text: str,
     name: str = "Imported structure",
     spring_k: float = 1.0,
     temperature: float = 0.6,
 ) -> SystemSpec:
-    """Parse a PDB and build an elastic-network SystemSpec."""
-    coords, elements, is_ca = parse_pdb(text)
+    """Parse a PDB or GROMACS .gro file and build an elastic-network SystemSpec."""
+    coords, elements, is_ca = _parse_structure(text)
     pos = np.array(coords, dtype=np.float64)
     elements = list(elements)
     ca_arr = np.array(is_ca, dtype=bool)
@@ -259,6 +316,161 @@ def combine_with_target(
         dt=min(base.dt, 0.01),
         steps=max(base.steps, 30000),
         temperature=base.temperature or 0.6,
+        seed=0,
+        stream=StreamConfig(frame_stride=10, max_fps=30),
+    )
+
+
+# ── Docked-complex import (split into antibody + antigen) ──────────────────────
+
+def _parse_pdb_chains(text: str):
+    """Parse ATOM/HETATM of the first model, keeping chain id + residue for each atom.
+
+    Returns (atoms, chain_ca_seq) where atoms is a list of
+    (chain, x, y, z, element, is_ca) and chain_ca_seq maps chain → 1-letter Cα
+    sequence (used to identify which chains are the antibody).
+    """
+    atoms: list[tuple[str, float, float, float, str, bool]] = []
+    chain_seq: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        rec = line[:6].strip()
+        if rec == "ENDMDL":
+            break
+        if rec not in ("ATOM", "HETATM"):
+            continue
+        try:
+            x = float(line[30:38]); y = float(line[38:46]); z = float(line[46:54])
+        except (ValueError, IndexError):
+            continue
+        chain = (line[21:22] or " ").strip() or "_"
+        atom_name = line[12:16]
+        element = _element_of(atom_name, line[76:78] if len(line) >= 78 else "")
+        is_ca = atom_name.strip() == "CA" and rec == "ATOM"
+        atoms.append((chain, x, y, z, element, is_ca))
+        if is_ca:
+            res = line[17:20].strip().upper()
+            chain_seq.setdefault(chain, []).append(_AA3TO1.get(res, "X"))
+    if not atoms:
+        raise PDBImportError("No ATOM/HETATM records found in the complex PDB")
+    return atoms, {c: "".join(s) for c, s in chain_seq.items()}
+
+
+def _classify_chains(chain_seq: dict[str, list[str]], vh: str, vl: str) -> set[str]:
+    """Return the set of chain ids that belong to the antibody.
+
+    Primary signal: sequence similarity to the known VH / VL. Falls back to the
+    conventional H/L chain ids, then to the best-matching single chain.
+    """
+    chains = list(chain_seq.keys())
+    vh = (vh or "").strip().upper()
+    vl = (vl or "").strip().upper()
+
+    def best_ratio(seq: str) -> float:
+        r = 0.0
+        for ref in (vh, vl):
+            if ref:
+                r = max(r, SequenceMatcher(None, seq, ref).ratio())
+        return r
+
+    scores = {c: best_ratio(seq) for c, seq in chain_seq.items()}
+    ab = {c for c, s in scores.items() if s > 0.6}
+    if not ab:
+        ab = {c for c in chains if c.upper() in ("H", "L")}
+    if not ab and scores:
+        ab = {max(scores, key=scores.get)}
+    # Guarantee both groups are non-empty when there are ≥2 chains.
+    if len(chains) >= 2 and len(ab) == len(chains):
+        ab.discard(min(scores, key=scores.get))
+    return ab
+
+
+def build_docked_complex_spec(
+    pdb: str,
+    vh: str = "",
+    vl: str = "",
+    name: str = "Docked complex",
+    spring_k: float = 1.0,
+    temperature: float = 0.5,
+    bind_epsilon: float = 0.5,
+) -> SystemSpec:
+    """Build a two-colour elastic-network model from an *already-docked* complex.
+
+    Atoms are split into antibody (chains matching VH/VL) and antigen (the rest),
+    coloured distinctly. Springs are built only WITHIN each group, so the bound
+    pose is preserved but the two bodies can flex at the interface; a Lennard-Jones
+    term models the inter-body contact. Coordinates are kept as-is (the complex is
+    already in its docked pose).
+    """
+    atoms, chain_seq = _parse_pdb_chains(pdb)
+    ab_chains = _classify_chains(chain_seq, vh, vl)
+
+    chains = np.array([a[0] for a in atoms])
+    pos_all = np.array([[a[1], a[2], a[3]] for a in atoms], dtype=np.float64)
+    is_ca_all = np.array([a[5] for a in atoms], dtype=bool)
+
+    # Coarse-grain to Cα for large complexes (keeps O(N^2) responsive + clean view).
+    if len(pos_all) > _ALL_ATOM_LIMIT and is_ca_all.any():
+        keep = np.where(is_ca_all)[0]
+        pos_all = pos_all[keep]
+        chains = chains[keep]
+        coarse = True
+    else:
+        coarse = bool(is_ca_all.mean() > 0.5)
+    if len(pos_all) > _HARD_CAP:
+        idx = np.linspace(0, len(pos_all) - 1, _HARD_CAP).astype(int)
+        pos_all = pos_all[idx]
+        chains = chains[idx]
+
+    n = len(pos_all)
+    # group 0 = antibody, 1 = antigen
+    group = np.array([0 if c in ab_chains else 1 for c in chains], dtype=np.int64)
+    n_ab = int((group == 0).sum())
+    n_ag = int((group == 1).sum())
+    if n_ab == 0 or n_ag == 0:
+        # Couldn't split — fall back to a single-body ENM so the run still opens.
+        return build_enm_spec(pdb, name=name, spring_k=spring_k, temperature=temperature)
+
+    cutoff = 9.0 if coarse else 5.0
+    bead_mass, bead_r = (110.0, 0.9) if coarse else (12.0, 0.5)
+    particle_types = [
+        ParticleType(name="Antibody", mass=bead_mass, radius=bead_r, color=_BODY_COLORS[0]),
+        ParticleType(name="Antigen", mass=bead_mass, radius=bead_r, color=_BODY_COLORS[1]),
+    ]
+
+    # Keep docked coordinates; just shift into a positive, padded open box.
+    pad = 8.0
+    pos = pos_all - pos_all.min(axis=0) + pad
+    lengths = (pos.max(axis=0) + pad).tolist()
+
+    # Springs only between atoms of the SAME group (intra-body), within cutoff.
+    d = pos[:, None, :] - pos[None, :, :]
+    dist = np.sqrt(np.sum(d * d, axis=2))
+    iu, ju = np.triu_indices(n, k=1)
+    same_group = group[iu] == group[ju]
+    within = (dist[iu, ju] < cutoff) & same_group
+    bonds = [Bond(i=int(i), j=int(j), r0=float(dist[i, j]), k=spring_k) for i, j in zip(iu[within], ju[within])]
+
+    force_terms = [
+        ForceTerm(kind="harmonic_bond", enabled=True),
+        ForceTerm(kind="lennard_jones", enabled=True, epsilon=bind_epsilon, sigma=3.0, cutoff=4.0),
+    ]
+
+    return SystemSpec(
+        name=name,
+        n_particles=n,
+        particle_types=particle_types,
+        type_index=group.tolist(),
+        positions=pos.tolist(),
+        box=Box(lengths=[float(l) for l in lengths], boundary="open"),
+        bonds=bonds,
+        force_terms=force_terms,
+        integrator="velocity_verlet",
+        thermostat="berendsen",
+        target_temperature=temperature,
+        thermostat_coupling=0.1,
+        dt=0.01,
+        steps=30000,
+        temperature=temperature,
         seed=0,
         stream=StreamConfig(frame_stride=10, max_fps=30),
     )

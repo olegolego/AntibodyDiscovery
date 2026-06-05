@@ -73,6 +73,28 @@ export async function addTarget(
   return jpost(`${BASE}/add-target`, { spec, pdb, name, gap, bind_epsilon: bindEpsilon });
 }
 
+export interface DockingRun {
+  id: string;
+  tool_id: string;
+  antigen_label: string;
+  created_at: string;
+}
+
+export async function listDockingRuns(): Promise<DockingRun[]> {
+  return jget(`${BASE}/docking-runs`);
+}
+
+export async function importDocking(
+  dockingId: string
+): Promise<{ spec: SystemSpec; n_particles: number; n_antibody: number; n_antigen: number }> {
+  const r = await fetch(`${BASE}/import-docking/${dockingId}`, { method: "POST" });
+  if (!r.ok) {
+    const detail = await r.json().catch(() => ({}));
+    throw new Error(detail.detail ?? `${r.status}`);
+  }
+  return r.json();
+}
+
 // Saved simulations
 export interface SavedSim {
   id: string;

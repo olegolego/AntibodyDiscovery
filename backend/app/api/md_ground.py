@@ -14,11 +14,13 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import MDForceScriptRow, MDSimulationRow
+from app.db.models import DockingResultRow, MDForceScriptRow, MDSimulationRow, MoleculeRow
 from app.db.session import get_db
 from app.md import presets as md_presets
 from app.md.custom_exec import CustomForceError, smoke_test
-from app.md.pdb_import import PDBImportError, build_enm_spec, combine_with_target
+from app.md.pdb_import import (
+    PDBImportError, build_docked_complex_spec, build_enm_spec, combine_with_target,
+)
 from app.md.potential_eval import FormulaError, validate_formula
 from app.md.spec import SystemSpec
 
@@ -232,6 +234,59 @@ async def add_target(body: AddTargetRequest) -> dict:
         "spec": combined.model_dump(),
         "n_particles": combined.n_particles,
         "n_bonds": len(combined.bonds),
+    }
+
+
+# ── Open a docking run (antibody + antigen, two colours) ──────────────────────
+
+@router.get("/docking-runs")
+async def list_docking_runs(db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """List docking results that have a complex PDB, newest first."""
+    rows = (await db.execute(
+        select(DockingResultRow)
+        .where(DockingResultRow.best_complex_pdb.isnot(None))
+        .order_by(DockingResultRow.created_at.desc())
+        .limit(100)
+    )).scalars().all()
+    return [
+        {
+            "id": r.id,
+            "tool_id": r.tool_id,
+            "antigen_label": r.antigen_label or "antigen",
+            "created_at": r.created_at.isoformat(),
+        }
+        for r in rows
+    ]
+
+
+@router.post("/import-docking/{docking_id}")
+async def import_docking(docking_id: str, db: AsyncSession = Depends(get_db)) -> dict:
+    """Open a docked complex in MD Ground, split into antibody + antigen."""
+    row = await db.get(DockingResultRow, docking_id)
+    if row is None or not row.best_complex_pdb:
+        raise HTTPException(status_code=404, detail="Docking result or complex PDB not found")
+
+    vh = vl = ""
+    if row.molecule_id:
+        mol = await db.get(MoleculeRow, row.molecule_id)
+        if mol:
+            vh, vl = mol.heavy_chain or "", mol.light_chain or ""
+
+    label = row.antigen_label or "antigen"
+    try:
+        spec = await asyncio.to_thread(
+            build_docked_complex_spec, row.best_complex_pdb, vh, vl, f"Complex — {label}",
+        )
+    except PDBImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    n_ab = sum(1 for t in spec.type_index if t == 0)
+    return {
+        "spec": spec.model_dump(),
+        "n_particles": spec.n_particles,
+        "n_bonds": len(spec.bonds),
+        "n_antibody": n_ab,
+        "n_antigen": spec.n_particles - n_ab,
     }
 
 
