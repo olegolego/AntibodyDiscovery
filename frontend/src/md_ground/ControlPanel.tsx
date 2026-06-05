@@ -1,10 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import { Atom, Loader2, Plus, Target, Trash2, Upload } from "lucide-react";
+import { Loader2, Plus, Target, Trash2, Upload } from "lucide-react";
 import { addTarget, getPreset, importDocking, importPDB, listDockingRuns, listPresets, type DockingRun } from "./api";
 import { useMDStore } from "./store";
 import { FormulaInput } from "./FormulaInput";
 import { PythonForceEditor } from "./PythonForceEditor";
 import type { Boundary, ForceKind, ForceTerm, IntegratorKind, PresetMeta, ThermostatKind } from "./types";
+
+// Build a distinguishing label for a docking run: antigen · HADDOCK score ·
+// antibody identity · timestamp · short id.
+function dockingLabel(d: DockingRun): string {
+  const score = d.score != null ? `⌀${d.score.toFixed(1)}` : "no score";
+  const who = d.molecule_name
+    ? d.molecule_name
+    : d.vh_preview
+      ? `${d.vh_preview}…${d.vh_len ? `(${d.vh_len}aa)` : ""}`
+      : "ab";
+  const when = new Date(d.created_at).toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+  return `${d.antigen_label} · ${score} · ${who} · ${when} · #${d.short_id}`;
+}
 
 const FORCE_LABELS: Record<ForceKind, string> = {
   lennard_jones: "Lennard-Jones",
@@ -197,14 +212,16 @@ export function ControlPanel() {
         >
           <option value="">{loadingDock ? "Opening…" : `Pick a complex (${dockingRuns.length})…`}</option>
           {dockingRuns.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.tool_id} · {d.antigen_label} · {new Date(d.created_at).toLocaleDateString()}
+            <option key={d.id} value={d.id} title={dockingLabel(d)}>
+              {dockingLabel(d)}
             </option>
           ))}
         </select>
-        <p className="text-[10px] text-slate-600 leading-snug flex items-center gap-1">
-          <Atom size={11} className="shrink-0" />
-          Loads a docked complex split into <span className="text-indigo-400">antibody</span> + <span className="text-amber-400">antigen</span>, each held by its own elastic network, with an interface Lennard-Jones term to relax the binding.
+        <p className="text-[10px] text-slate-600 leading-snug">
+          Loads a docked complex split into{" "}
+          <span className="text-indigo-400">antibody</span> +{" "}
+          <span className="text-amber-400">antigen</span>, each held by its own
+          elastic network, with an interface Lennard-Jones term to relax the binding.
         </p>
       </Section>
 
@@ -280,6 +297,18 @@ export function ControlPanel() {
               onChange={(v) => patchSpec({ thermostat_coupling: v })} />
           </div>
         )}
+      </Section>
+
+      <Section title="Preprocessing pipeline">
+        <div className="grid grid-cols-2 gap-2">
+          <Num label="Minimise steps" value={spec.minimize_steps} step={100} min={0}
+            onChange={(v) => patchSpec({ minimize_steps: Math.max(0, Math.round(v)) })} />
+          <Num label="Equilibrate steps" value={spec.equilibrate_steps} step={100} min={0}
+            onChange={(v) => patchSpec({ equilibrate_steps: Math.max(0, Math.round(v)) })} />
+        </div>
+        <p className="text-[10px] text-slate-600 leading-snug">
+          GROMACS-style stages run before production: <b>minimise</b> (steepest-descent to remove clashes), then <b>equilibrate</b> (thermostatted MD to reach target T), then your production run. Set 0 to skip a stage.
+        </p>
       </Section>
 
       <Section title="Force terms">

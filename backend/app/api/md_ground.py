@@ -241,22 +241,51 @@ async def add_target(body: AddTargetRequest) -> dict:
 
 @router.get("/docking-runs")
 async def list_docking_runs(db: AsyncSession = Depends(get_db)) -> list[dict]:
-    """List docking results that have a complex PDB, newest first."""
+    """List docking results that have a complex PDB, newest first.
+
+    Enriched with the HADDOCK score and the antibody's identity so 100 otherwise
+    identical-looking rows are actually distinguishable.
+    """
     rows = (await db.execute(
         select(DockingResultRow)
         .where(DockingResultRow.best_complex_pdb.isnot(None))
         .order_by(DockingResultRow.created_at.desc())
         .limit(100)
     )).scalars().all()
-    return [
-        {
+
+    # Batch-load the linked molecules (one query, not one per row).
+    mol_ids = {r.molecule_id for r in rows if r.molecule_id}
+    mols: dict[str, MoleculeRow] = {}
+    if mol_ids:
+        mrows = (await db.execute(
+            select(MoleculeRow).where(MoleculeRow.id.in_(mol_ids))
+        )).scalars().all()
+        mols = {m.id: m for m in mrows}
+
+    out = []
+    for r in rows:
+        scores = {}
+        try:
+            scores = json.loads(r.scores) if r.scores else {}
+        except Exception:
+            scores = {}
+        mol = mols.get(r.molecule_id or "")
+        vh = (mol.heavy_chain if mol else None) or ""
+        out.append({
             "id": r.id,
+            "short_id": r.id[:8],
             "tool_id": r.tool_id,
             "antigen_label": r.antigen_label or "antigen",
             "created_at": r.created_at.isoformat(),
-        }
-        for r in rows
-    ]
+            "score": scores.get("score"),          # HADDOCK score (lower = better)
+            "vdw": scores.get("vdw"),
+            "n_models": scores.get("n_models"),
+            "molecule_name": (mol.name if mol else None),
+            "vh_preview": vh[:12] if vh else None,
+            "vh_len": len(vh) if vh else None,
+            "run_id": r.run_id,
+        })
+    return out
 
 
 @router.post("/import-docking/{docking_id}")

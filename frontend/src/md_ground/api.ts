@@ -75,9 +75,17 @@ export async function addTarget(
 
 export interface DockingRun {
   id: string;
+  short_id: string;
   tool_id: string;
   antigen_label: string;
   created_at: string;
+  score: number | null;
+  vdw: number | null;
+  n_models: number | null;
+  molecule_name: string | null;
+  vh_preview: string | null;
+  vh_len: number | null;
+  run_id: string | null;
 }
 
 export async function listDockingRuns(): Promise<DockingRun[]> {

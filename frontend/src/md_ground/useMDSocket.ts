@@ -50,7 +50,8 @@ export function useMDSocket(simId: string) {
               msg.step as number,
               msg.time as number,
               msg.positions as number[],
-              msg.energy as Energy
+              msg.energy as Energy,
+              msg.phase as string | undefined
             );
             break;
           case "done":

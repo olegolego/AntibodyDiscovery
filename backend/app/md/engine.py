@@ -181,6 +181,54 @@ class Simulation:
                 f"(max speed {float(np.max(speeds)):.1f} > {self.max_speed:.0f}); reduce dt"
             )
 
+    # ── energy minimisation (preprocessing) ─────────────────────────────────────
+
+    def setup_minimize(self) -> None:
+        """Initialise steepest-descent state. Call once before minimize_step()."""
+        # Characteristic length sets a sane per-atom displacement cap that works in
+        # both reduced (sigma~1) and Ångström (bond r0~3.8) regimes.
+        if self.bonds_ij.shape[0]:
+            char = float(np.mean(self.bonds_r0))
+        else:
+            sigmas = [t.sigma for t in self.spec.force_terms if t.kind == "lennard_jones"]
+            char = float(sigmas[0]) if sigmas else 1.0
+        self._max_disp = 0.1 * char
+        self._min_alpha = 0.01 * char
+        self.forces, self.potential = self._compute_forces()
+
+    def minimize_step(self) -> None:
+        """One steepest-descent step with adaptive step size + energy backtracking.
+
+        Moves atoms along the force (negative PE gradient), capped to _max_disp per
+        atom. Accepts the move only if the potential energy decreases (otherwise it
+        reverts and shrinks the step), so the potential energy is monotonically
+        non-increasing — this removes clashes without ever blowing up.
+        """
+        f = self.forces
+        fmax = float(np.max(np.linalg.norm(f, axis=1))) if f.size else 0.0
+        if fmax < 1e-9:
+            return
+        disp = self._min_alpha * f
+        dmag = np.linalg.norm(disp, axis=1)
+        scale = np.where(dmag > self._max_disp, self._max_disp / np.maximum(dmag, 1e-12), 1.0)
+        disp = disp * scale[:, None]
+
+        old_pos, old_pe, old_f = self.pos.copy(), self.potential, self.forces
+        self.pos = self.pos + disp
+        self._apply_boundary()
+        new_f, new_pe = self._compute_forces()
+        if np.isfinite(new_pe) and new_pe < old_pe:
+            self.forces, self.potential = new_f, new_pe
+            self._min_alpha *= 1.1
+        else:
+            self.pos, self.forces, self.potential = old_pos, old_f, old_pe
+            self._min_alpha *= 0.5
+
+    def reset_velocities(self, temperature: float) -> None:
+        """Re-draw Maxwell-Boltzmann velocities (used after minimisation)."""
+        rng = np.random.default_rng(self.spec.seed + 1)
+        self.vel = integ.maxwell_boltzmann(self.masses, temperature, rng)
+
     # ── observables ────────────────────────────────────────────────────────────
 
     def kinetic_energy(self) -> float:

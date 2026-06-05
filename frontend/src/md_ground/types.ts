@@ -69,6 +69,8 @@ export interface SystemSpec {
   steps: number;
   temperature: number;
   seed: number;
+  minimize_steps: number;
+  equilibrate_steps: number;
   stream: StreamConfig;
 }
 
@@ -134,6 +136,8 @@ export function defaultSpec(): SystemSpec {
     steps: 8000,
     temperature: 1.2,
     seed: 0,
+    minimize_steps: 0,
+    equilibrate_steps: 0,
     stream: { frame_stride: 4, max_fps: 30 },
   };
 }

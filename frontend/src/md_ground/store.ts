@@ -34,6 +34,7 @@ interface MDState {
 
   // playback buffer
   frames: MDFrame[];
+  phase: string; // current pipeline phase: minimize | equilibrate | production
   playbackIndex: number;
   playing: boolean;
   follow: boolean; // stick to the newest frame as it streams in
@@ -47,13 +48,25 @@ interface MDState {
   patchSpec: (patch: Partial<SystemSpec>) => void;
   setStatus: (status: SimStatus, error?: string | null) => void;
   applyInit: (msg: InitMessage) => void;
-  pushFrame: (step: number, time: number, positions: number[], energy: Energy) => void;
+  pushFrame: (step: number, time: number, positions: number[], energy: Energy, phase?: string) => void;
   setPlaybackIndex: (i: number) => void;
   setPlaying: (p: boolean) => void;
   setFollow: (f: boolean) => void;
   setSummary: (s: Summary) => void;
   resetPlayback: () => void;
   toggleView: (k: keyof ViewOptions) => void;
+  loadRun: (run: SavedRunData) => void;
+}
+
+// Shape of a downloaded run JSON (see exporters.ts).
+export interface SavedRunData {
+  spec: SystemSpec;
+  particle_types: ParticleType[];
+  type_index: number[];
+  box_lengths: [number, number, number];
+  energy_history: ({ step: number } & Energy)[];
+  frames: { step: number; time: number; positions: number[] }[];
+  summary: Summary | null;
 }
 
 export const useMDStore = create<MDState>((set) => ({
@@ -67,6 +80,7 @@ export const useMDStore = create<MDState>((set) => ({
   totalSteps: 0,
 
   frames: [],
+  phase: "",
   playbackIndex: 0,
   playing: false,
   follow: true,
@@ -86,6 +100,7 @@ export const useMDStore = create<MDState>((set) => ({
       boxLengths: msg.box.lengths as [number, number, number],
       totalSteps: msg.total_steps,
       frames: [],
+      phase: "",
       energyHistory: [],
       playbackIndex: 0,
       playing: true,
@@ -93,7 +108,7 @@ export const useMDStore = create<MDState>((set) => ({
       summary: null,
     }),
 
-  pushFrame: (step, time, positions, energy) =>
+  pushFrame: (step, time, positions, energy, phase) =>
     set((s) => {
       const frame: MDFrame = {
         step,
@@ -108,7 +123,7 @@ export const useMDStore = create<MDState>((set) => ({
       energyHistory.push({ step, ...energy });
       // If following, jump the playhead to the freshest frame.
       const playbackIndex = s.follow ? frames.length - 1 : s.playbackIndex;
-      return { frames, energyHistory, playbackIndex };
+      return { frames, energyHistory, playbackIndex, phase: phase ?? s.phase };
     }),
 
   setPlaybackIndex: (i) =>
@@ -124,4 +139,27 @@ export const useMDStore = create<MDState>((set) => ({
     set({ frames: [], energyHistory: [], playbackIndex: 0, playing: false, summary: null }),
 
   toggleView: (k) => set((s) => ({ view: { ...s.view, [k]: !s.view[k] } })),
+
+  loadRun: (run) =>
+    set({
+      spec: run.spec,
+      particleTypes: run.particle_types,
+      typeIndex: run.type_index,
+      boxLengths: run.box_lengths,
+      frames: run.frames.map((f) => ({
+        step: f.step,
+        time: f.time,
+        positions: Float32Array.from(f.positions),
+        energy: { kinetic: 0, potential: 0, total: 0, temperature: 0 },
+      })),
+      energyHistory: run.energy_history,
+      summary: run.summary,
+      status: "done",
+      error: null,
+      phase: "",
+      playbackIndex: 0,
+      playing: true,
+      follow: false,
+      totalSteps: run.frames.length ? run.frames[run.frames.length - 1].step : 0,
+    }),
 }));

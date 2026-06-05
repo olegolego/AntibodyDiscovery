@@ -62,67 +62,93 @@ async def run_simulation(sim_id: str, spec: SystemSpec) -> dict:
         await manager.broadcast(sim_id, {"type": "error", "message": str(exc), "step": 0})
         raise
 
+    min_steps = max(0, spec.minimize_steps)
+    eq_steps = max(0, spec.equilibrate_steps)
+    total_steps = min_steps + eq_steps + spec.steps
+
     await manager.broadcast(sim_id, {
         "type": "init",
         "n_particles": spec.n_particles,
         "particle_types": [t.model_dump() for t in sim.types],
         "type_index": sim.type_index.tolist(),
         "box": spec.box.model_dump(),
-        "total_steps": spec.steps,
+        "total_steps": total_steps,
+        "phases": {"minimize": min_steps, "equilibrate": eq_steps, "production": spec.steps},
     })
 
     stride = max(1, spec.stream.frame_stride)
     min_frame_dt = 1.0 / spec.stream.max_fps if spec.stream.max_fps > 0 else 0.0
     start = time.monotonic()
-    last_emit = 0.0
+    ctr = {"gstep": 0, "last_emit": 0.0}
 
-    # Emit the initial frame so the viewer has something before any stepping.
-    await manager.broadcast(sim_id, {
-        "type": "frame", "step": 0, "time": 0.0,
-        "positions": sim.flat_positions(), "energy": sim.energy_dict(),
-    })
+    async def _emit(phase: str, force: bool = False) -> None:
+        now = time.monotonic()
+        if force or (ctr["gstep"] % stride == 0 and now - ctr["last_emit"] >= min_frame_dt):
+            ctr["last_emit"] = now
+            await manager.broadcast(sim_id, {
+                "type": "frame", "phase": phase,
+                "step": ctr["gstep"], "time": sim.time,
+                "positions": sim.flat_positions(), "energy": sim.energy_dict(),
+            })
 
-    try:
-        while sim.step_index < spec.steps:
+    async def _run_phase(phase: str, n: int, step_fn) -> bool:
+        """Run n steps of step_fn in batches, emitting frames. Returns False if
+        cancelled (caller should stop)."""
+        done = 0
+        while done < n:
             if sim_id in _cancelled_sims:
                 _cancelled_sims.discard(sim_id)
                 await manager.broadcast(sim_id, {"type": "cancelled"})
-                return _make_summary(sim, time.monotonic() - start)
+                return False
+            batch = min(_BATCH, n - done)
 
-            remaining = spec.steps - sim.step_index
-            batch = min(_BATCH, remaining)
-
-            def _run_batch(s=sim, k=batch):
+            def _run_batch(k=batch, fn=step_fn):
                 for _ in range(k):
-                    s.step()
+                    fn()
 
             await loop.run_in_executor(None, _run_batch)
-
-            # Frame decimation: stride gate + wall-clock fps cap.
-            if sim.step_index % stride == 0 or sim.step_index >= spec.steps:
-                now = time.monotonic()
-                if now - last_emit >= min_frame_dt or sim.step_index >= spec.steps:
-                    last_emit = now
-                    await manager.broadcast(sim_id, {
-                        "type": "frame",
-                        "step": sim.step_index,
-                        "time": sim.time,
-                        "positions": sim.flat_positions(),
-                        "energy": sim.energy_dict(),
-                    })
-            # Yield to the event loop so sockets/cancel stay responsive.
+            done += batch
+            ctr["gstep"] += batch
+            await _emit(phase)
             await asyncio.sleep(0)
+        return True
+
+    await _emit("minimize" if min_steps else ("equilibrate" if eq_steps else "production"), force=True)
+
+    try:
+        # ── Phase 1: energy minimisation (steepest descent) ──
+        if min_steps:
+            sim.setup_minimize()
+            if not await _run_phase("minimize", min_steps, sim.minimize_step):
+                return _make_summary(sim, time.monotonic() - start)
+            # Fresh velocities for the dynamics phases after minimisation.
+            sim.reset_velocities(spec.target_temperature or spec.temperature)
+            sim.forces, sim.potential = sim._compute_forces()
+            sim.initial_energy = sim.total_energy()
+
+        # ── Phase 2: equilibration (force a Berendsen thermostat at target T) ──
+        if eq_steps:
+            saved_thermo = spec.thermostat
+            spec.thermostat = "berendsen" if saved_thermo == "none" else saved_thermo
+            try:
+                ok = await _run_phase("equilibrate", eq_steps, sim.step)
+            finally:
+                spec.thermostat = saved_thermo
+            if not ok:
+                return _make_summary(sim, time.monotonic() - start)
+            sim.initial_energy = sim.total_energy()  # drift measured over production
+
+        # ── Phase 3: production ──
+        if not await _run_phase("production", spec.steps, sim.step):
+            return _make_summary(sim, time.monotonic() - start)
+        await _emit("production", force=True)
 
     except SimulationError as exc:
-        await manager.broadcast(sim_id, {
-            "type": "error", "message": str(exc), "step": sim.step_index,
-        })
+        await manager.broadcast(sim_id, {"type": "error", "message": str(exc), "step": ctr["gstep"]})
         return _make_summary(sim, time.monotonic() - start)
     except Exception as exc:  # noqa: BLE001
         log.exception("MD sim %s crashed", sim_id)
-        await manager.broadcast(sim_id, {
-            "type": "error", "message": f"Internal error: {exc}", "step": sim.step_index,
-        })
+        await manager.broadcast(sim_id, {"type": "error", "message": f"Internal error: {exc}", "step": ctr["gstep"]})
         return _make_summary(sim, time.monotonic() - start)
 
     summary = _make_summary(sim, time.monotonic() - start)

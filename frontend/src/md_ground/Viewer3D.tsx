@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef } from "react";
-import { Maximize2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Circle, Maximize2, Square } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
@@ -19,6 +19,10 @@ interface ViewData {
 export function Viewer3D() {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const fitFnRef = useRef<(() => void) | null>(null);
+  const canvasElRef = useRef<HTMLCanvasElement | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const [recording, setRecording] = useState(false);
+  const [recError, setRecError] = useState<string | null>(null);
   const stateRef = useRef<{
     renderer: THREE.WebGLRenderer;
     scene: THREE.Scene;
@@ -37,6 +41,46 @@ export function Viewer3D() {
   } | null>(null);
 
   const fit = useCallback(() => fitFnRef.current?.(), []);
+
+  // Record the live WebGL canvas to a downloadable WebM video (great for slides).
+  const toggleRecord = useCallback(() => {
+    if (recording) {
+      recorderRef.current?.stop();
+      return;
+    }
+    const canvas = canvasElRef.current;
+    if (!canvas || typeof canvas.captureStream !== "function" || typeof MediaRecorder === "undefined") {
+      setRecError("Video recording isn't supported in this browser (try Chrome).");
+      return;
+    }
+    try {
+      const mime = ["video/webm;codecs=vp9", "video/webm;codecs=vp8", "video/webm"].find(
+        (m) => MediaRecorder.isTypeSupported(m)
+      );
+      const stream = canvas.captureStream(60);
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const chunks: BlobPart[] = [];
+      rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+      rec.onstop = () => {
+        const blob = new Blob(chunks, { type: "video/webm" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "md-ground.webm";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        setRecording(false);
+      };
+      recorderRef.current = rec;
+      rec.start();
+      setRecError(null);
+      setRecording(true);
+    } catch (e) {
+      setRecError(`Recording failed: ${(e as Error).message}`);
+    }
+  }, [recording]);
 
   useEffect(() => {
     const mount = mountRef.current!;
@@ -67,6 +111,7 @@ export function Viewer3D() {
     renderer.domElement.style.position = "absolute";
     renderer.domElement.style.inset = "0";
     mount.appendChild(renderer.domElement);
+    canvasElRef.current = renderer.domElement;
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -77,8 +122,12 @@ export function Viewer3D() {
     controls.rotateSpeed = 0.65;
     controls.zoomSpeed = 0.9;
     controls.panSpeed = 0.8;
-    controls.minDistance = 0.5;
-    controls.maxDistance = 12000;
+    // Zoom toward the cursor (not just the orbit centre) so you can dive into any
+    // region; the wide distance range gives lots of variability from extreme
+    // close-ups to a full pull-back.
+    controls.zoomToCursor = true;
+    controls.minDistance = 0.2;
+    controls.maxDistance = 20000;
     controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
@@ -336,13 +385,32 @@ export function Viewer3D() {
   return (
     <div className="relative w-full h-full">
       <div ref={mountRef} className="w-full h-full" />
-      <button
-        onClick={fit}
-        title="Fit view to structure"
-        className="absolute top-3 right-3 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-slate-200 bg-surface/80 backdrop-blur border border-border hover:border-slate-500 hover:text-white"
-      >
-        <Maximize2 size={13} /> Fit view
-      </button>
+      <div className="absolute top-3 right-3 flex items-center gap-2">
+        <button
+          onClick={toggleRecord}
+          title={recording ? "Stop recording & download .webm" : "Record the view to a video"}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium border backdrop-blur ${
+            recording
+              ? "text-white bg-red-600/80 border-red-500"
+              : "text-slate-200 bg-surface/80 border-border hover:border-slate-500 hover:text-white"
+          }`}
+        >
+          {recording ? <Square size={12} fill="white" /> : <Circle size={12} className="text-red-400" fill="currentColor" />}
+          {recording ? "Stop" : "Record"}
+        </button>
+        <button
+          onClick={fit}
+          title="Fit view to structure"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium text-slate-200 bg-surface/80 backdrop-blur border border-border hover:border-slate-500 hover:text-white"
+        >
+          <Maximize2 size={13} /> Fit view
+        </button>
+      </div>
+      {recError && (
+        <div className="absolute top-12 right-3 text-[11px] text-red-300 bg-red-950/80 border border-red-500/30 rounded px-2 py-1 max-w-xs">
+          {recError}
+        </div>
+      )}
     </div>
   );
 }

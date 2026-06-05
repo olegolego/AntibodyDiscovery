@@ -1,12 +1,20 @@
-import { useMemo } from "react";
-import { ArrowLeft, Atom, Play, Square } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { ArrowLeft, Atom, Download, FileUp, Film, Play, Sigma, Square, TrendingUp } from "lucide-react";
 import { randomUUID } from "@/utils";
 import { ControlPanel } from "./ControlPanel";
 import { EnergyCharts } from "./EnergyCharts";
+import { MathPanel } from "./MathPanel";
 import { PlaybackControls } from "./PlaybackControls";
 import { Viewer3D } from "./Viewer3D";
 import { useMDSocket } from "./useMDSocket";
 import { useMDStore } from "./store";
+import { downloadRunJSON, downloadTrajectoryXYZ } from "./exporters";
+
+const PHASE_LABEL: Record<string, string> = {
+  minimize: "Minimising",
+  equilibrate: "Equilibrating",
+  production: "Production",
+};
 
 const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
   idle: { text: "Idle", cls: "text-slate-500" },
@@ -25,10 +33,35 @@ export function MDGroundPage({ onBack }: { onBack: () => void }) {
   const spec = useMDStore((s) => s.spec);
   const status = useMDStore((s) => s.status);
   const error = useMDStore((s) => s.error);
+  const phase = useMDStore((s) => s.phase);
   const resetPlayback = useMDStore((s) => s.resetPlayback);
+  const [rightTab, setRightTab] = useState<"energy" | "math">("energy");
+  const loadRunFileRef = useRef<HTMLInputElement | null>(null);
 
   const isRunning = status === "running" || status === "connecting";
   const st = STATUS_LABEL[status] ?? STATUS_LABEL.idle;
+  const hasFrames = useMDStore((s) => s.frames.length > 0);
+
+  function saveJSON() {
+    const s = useMDStore.getState();
+    downloadRunJSON(s.spec, s.particleTypes, s.typeIndex, s.boxLengths, s.energyHistory, s.frames, s.summary);
+  }
+  function saveXYZ() {
+    const s = useMDStore.getState();
+    downloadTrajectoryXYZ(s.spec.name, s.particleTypes, s.typeIndex, s.frames);
+  }
+  async function onLoadRunFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      if (data?.format !== "md-ground-run") throw new Error("Not an MD Ground run file");
+      useMDStore.getState().loadRun(data);
+    } catch (err) {
+      useMDStore.getState().setStatus("error", `Load run failed: ${(err as Error).message}`);
+    }
+  }
 
   function handleRun() {
     resetPlayback();
@@ -52,7 +85,30 @@ export function MDGroundPage({ onBack }: { onBack: () => void }) {
         <div className="flex-1" />
 
         <span className={`text-xs font-medium ${st.cls}`}>● {st.text}</span>
+        {isRunning && phase && PHASE_LABEL[phase] && (
+          <span className="text-[11px] font-medium text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5">
+            {PHASE_LABEL[phase]}
+          </span>
+        )}
         {error && <span className="text-xs text-red-400 max-w-md truncate" title={error}>{error}</span>}
+
+        {/* Save / export run */}
+        <input ref={loadRunFileRef} type="file" accept=".json" onChange={onLoadRunFile} className="hidden" />
+        <button onClick={() => loadRunFileRef.current?.click()}
+          title="Load a saved .mdrun.json to replay it"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white border border-border hover:border-slate-500">
+          <FileUp size={13} /> Load run
+        </button>
+        <button onClick={saveJSON} disabled={!hasFrames}
+          title="Download this run as JSON (re-loadable to replay)"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white border border-border hover:border-slate-500 disabled:opacity-40">
+          <Download size={13} /> Save run
+        </button>
+        <button onClick={saveXYZ} disabled={!hasFrames}
+          title="Download the trajectory as multi-frame XYZ (PyMOL / VMD)"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white border border-border hover:border-slate-500 disabled:opacity-40">
+          <Film size={13} /> XYZ
+        </button>
 
         {isRunning ? (
           <button onClick={cancel}
@@ -84,9 +140,24 @@ export function MDGroundPage({ onBack }: { onBack: () => void }) {
           <PlaybackControls />
         </div>
 
-        {/* Right: energy + temperature */}
-        <div className="w-[22rem] shrink-0 border-l border-border bg-surface overflow-y-auto p-3">
-          <EnergyCharts />
+        {/* Right: energy charts / equations */}
+        <div className="w-[22rem] shrink-0 border-l border-border bg-surface flex flex-col overflow-hidden">
+          <div className="flex shrink-0 border-b border-border">
+            {([["energy", "Energy", TrendingUp], ["math", "Equations", Sigma]] as const).map(([key, label, Icon]) => (
+              <button
+                key={key}
+                onClick={() => setRightTab(key)}
+                className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
+                  rightTab === key ? "text-white border-b-2 border-indigo-500 bg-white/5" : "text-slate-500 hover:text-slate-300"
+                }`}
+              >
+                <Icon size={13} /> {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex-1 overflow-y-auto p-3">
+            {rightTab === "energy" ? <EnergyCharts /> : <MathPanel />}
+          </div>
         </div>
       </div>
     </div>

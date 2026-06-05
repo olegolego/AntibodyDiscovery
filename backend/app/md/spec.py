@@ -104,6 +104,14 @@ class SystemSpec(BaseModel):
     temperature: float = 1.0             # initial MB temperature when velocities unset
     seed: int = 0
 
+    # ── Preprocessing pipeline (GROMACS-style: minimise → equilibrate → run) ──
+    # minimize_steps: steepest-descent energy minimisation to remove clashes/bad
+    #   contacts before any dynamics (like `mdrun` with integrator=steep).
+    # equilibrate_steps: thermostatted MD to bring the system to target_temperature
+    #   before the production run (like an NVT equilibration phase).
+    minimize_steps: int = 0
+    equilibrate_steps: int = 0
+
     stream: StreamConfig = Field(default_factory=StreamConfig)
 
 
