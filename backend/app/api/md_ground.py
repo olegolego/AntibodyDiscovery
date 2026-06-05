@@ -18,7 +18,7 @@ from app.db.models import MDForceScriptRow, MDSimulationRow
 from app.db.session import get_db
 from app.md import presets as md_presets
 from app.md.custom_exec import CustomForceError, smoke_test
-from app.md.pdb_import import PDBImportError, build_enm_spec
+from app.md.pdb_import import PDBImportError, build_enm_spec, combine_with_target
 from app.md.potential_eval import FormulaError, validate_formula
 from app.md.spec import SystemSpec
 
@@ -204,6 +204,34 @@ async def import_pdb(body: ImportPDBRequest) -> dict:
         "spec": spec.model_dump(),
         "n_particles": spec.n_particles,
         "n_bonds": len(spec.bonds),
+    }
+
+
+class AddTargetRequest(BaseModel):
+    spec: dict           # the currently-loaded SystemSpec (must have positions)
+    pdb: str             # target protein PDB text
+    name: str = "Target"
+    gap: float = 5.0     # Å gap between the two bounding spheres
+    bind_epsilon: float = 0.4
+
+
+@router.post("/add-target")
+async def add_target(body: AddTargetRequest) -> dict:
+    """Dock a target protein next to the loaded structure (non-overlapping)."""
+    try:
+        base = SystemSpec.model_validate(body.spec)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=422, detail=f"Invalid current spec: {exc}")
+    try:
+        combined = await asyncio.to_thread(
+            combine_with_target, base, body.pdb, body.name, body.gap, body.bind_epsilon
+        )
+    except PDBImportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {
+        "spec": combined.model_dump(),
+        "n_particles": combined.n_particles,
+        "n_bonds": len(combined.bonds),
     }
 
 

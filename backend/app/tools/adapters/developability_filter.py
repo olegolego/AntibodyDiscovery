@@ -52,6 +52,18 @@ class DevelopabilityFilterAdapter:
                         payload[f"variant_{i}"] = v
                         n_variants += 1
 
+        # Single VH/VL pair (e.g. wired straight from Loop Start / Sequence Input).
+        # Forward it so run.py assesses it as a one-variant batch — otherwise the
+        # pair is dropped here and the subprocess sees "0 variants".
+        if not n_variants:
+            single_vh = inputs.get("heavy_chain") or inputs.get("vh")
+            single_vl = inputs.get("light_chain") or inputs.get("vl")
+            if single_vh:
+                payload["heavy_chain"] = single_vh
+                if single_vl:
+                    payload["light_chain"] = single_vl
+                n_variants = 1
+
         acq = inputs.get("acquisition_scores")
         if acq:
             payload["acquisition_scores"] = acq

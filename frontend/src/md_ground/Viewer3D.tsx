@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { Maximize2 } from "lucide-react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { useMDStore } from "./store";
 
 interface ViewData {
@@ -40,13 +41,31 @@ export function Viewer3D() {
   useEffect(() => {
     const mount = mountRef.current!;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0a0f1e);
+    scene.background = new THREE.Color(0x080b18);
 
     const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 20000);
     camera.position.set(20, 16, 28);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
+    // Filmic tone-mapping + sRGB output gives punchy, vivid colour and soft
+    // highlight roll-off (the "shiny" look) instead of flat, washed-out shading.
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.25;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // A generated room environment gives the spheres real reflections so the
+    // metallic/clearcoat material actually looks glossy.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    // The canvas must visually fill the container; setSize(...false) below only
+    // sizes the drawing buffer, so CSS controls display size. Without this the
+    // canvas stays at its default 300×150 in a corner and OrbitControls only
+    // responds to drags over that little patch.
+    renderer.domElement.style.display = "block";
+    renderer.domElement.style.width = "100%";
+    renderer.domElement.style.height = "100%";
+    renderer.domElement.style.position = "absolute";
+    renderer.domElement.style.inset = "0";
     mount.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -63,13 +82,21 @@ export function Viewer3D() {
     controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
     controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
-    const key = new THREE.DirectionalLight(0xffffff, 0.9);
-    key.position.set(1, 1, 1);
+    // Soft ambient + a white key for form, then two saturated rim lights
+    // (indigo + cyan) that wrap the spheres in colourful highlights.
+    scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+    const key = new THREE.DirectionalLight(0xffffff, 1.1);
+    key.position.set(1, 1.2, 1);
     scene.add(key);
-    const rim = new THREE.DirectionalLight(0x6688ff, 0.4);
-    rim.position.set(-1, -0.5, -1);
-    scene.add(rim);
+    const rimA = new THREE.PointLight(0x6366f1, 120, 0, 2); // indigo
+    rimA.position.set(-18, 10, -14);
+    scene.add(rimA);
+    const rimB = new THREE.PointLight(0x22d3ee, 90, 0, 2);  // cyan
+    rimB.position.set(16, -10, 18);
+    scene.add(rimB);
+    const rimC = new THREE.PointLight(0xec4899, 70, 0, 2);  // pink fill
+    rimC.position.set(0, 18, -18);
+    scene.add(rimC);
 
     const st = {
       renderer, scene, camera, controls,
@@ -167,8 +194,17 @@ export function Viewer3D() {
         st.mesh.geometry.dispose();
         (st.mesh.material as THREE.Material).dispose();
       }
-      const geo = new THREE.SphereGeometry(1, 16, 12);
-      const mat = new THREE.MeshStandardMaterial({ roughness: 0.4, metalness: 0.1 });
+      const geo = new THREE.SphereGeometry(1, 24, 18);
+      // Glossy clearcoat material: reflective and slightly metallic so the
+      // env-map and coloured rim lights read as wet, shiny highlights. The
+      // per-instance colour (set below) tints each sphere by particle type.
+      const mat = new THREE.MeshPhysicalMaterial({
+        roughness: 0.22,
+        metalness: 0.45,
+        clearcoat: 0.85,
+        clearcoatRoughness: 0.18,
+        envMapIntensity: 1.25,
+      });
       const mesh = new THREE.InstancedMesh(geo, mat, Math.max(v.n, 1));
       mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(v.n, 1) * 3), 3);
       const radii = new Float32Array(v.n);
@@ -192,7 +228,7 @@ export function Viewer3D() {
       const [lx, ly, lz] = v.boxLengths;
       const boxLines = new THREE.LineSegments(
         new THREE.EdgesGeometry(new THREE.BoxGeometry(lx, ly, lz)),
-        new THREE.LineBasicMaterial({ color: 0x33406a })
+        new THREE.LineBasicMaterial({ color: 0x4858a8, transparent: true, opacity: 0.6 })
       );
       boxLines.position.set(lx / 2, ly / 2, lz / 2);
       boxLines.visible = useMDStore.getState().view.showBox;
@@ -230,7 +266,7 @@ export function Viewer3D() {
         }
         const g = new THREE.BufferGeometry();
         g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(bonds.length * 6), 3));
-        st.bondLines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x9ca3ff, transparent: true, opacity: 0.5 }));
+        st.bondLines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xc4b5fd, transparent: true, opacity: 0.65 }));
         scene.add(st.bondLines);
       }
       const arr = st.bondLines.geometry.attributes.position.array as Float32Array;
@@ -280,6 +316,7 @@ export function Viewer3D() {
       cancelAnimationFrame(st.raf);
       ro.disconnect();
       controls.dispose();
+      pmrem.dispose();
       renderer.dispose();
       if (st.mesh) {
         st.mesh.geometry.dispose();

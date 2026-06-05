@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Plus, Trash2, Upload } from "lucide-react";
-import { getPreset, importPDB, listPresets } from "./api";
+import { Loader2, Plus, Target, Trash2, Upload } from "lucide-react";
+import { addTarget, getPreset, importPDB, listPresets } from "./api";
 import { useMDStore } from "./store";
 import { FormulaInput } from "./FormulaInput";
 import { PythonForceEditor } from "./PythonForceEditor";
@@ -49,8 +49,12 @@ export function ControlPanel() {
   const toggleView = useMDStore((s) => s.toggleView);
   const [presets, setPresets] = useState<PresetMeta[]>([]);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const targetRef = useRef<HTMLInputElement | null>(null);
   const [pdbStatus, setPdbStatus] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [addingTarget, setAddingTarget] = useState(false);
+
+  const hasStructure = !!(spec.positions && spec.positions.length > 0);
 
   useEffect(() => {
     listPresets().then(setPresets).catch(() => {});
@@ -72,6 +76,25 @@ export function ControlPanel() {
       setPdbStatus(`Error: ${(err as Error).message}`);
     } finally {
       setImporting(false);
+    }
+  }
+
+  async function onTargetFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setAddingTarget(true);
+    setPdbStatus(null);
+    try {
+      const text = await file.text();
+      const name = file.name.replace(/\.(pdb|ent|cif)$/i, "");
+      const out = await addTarget(spec, text, name);
+      patchSpec(out.spec);
+      setPdbStatus(`Docked target: ${out.n_particles} atoms total · placed without overlap`);
+    } catch (err) {
+      setPdbStatus(`Error: ${(err as Error).message}`);
+    } finally {
+      setAddingTarget(false);
     }
   }
 
@@ -126,6 +149,16 @@ export function ControlPanel() {
           {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
           {importing ? "Importing…" : "Load PDB file"}
         </button>
+        <input ref={targetRef} type="file" accept=".pdb,.ent,.cif" onChange={onTargetFile} className="hidden" />
+        <button
+          onClick={() => targetRef.current?.click()}
+          disabled={addingTarget || !hasStructure}
+          title={hasStructure ? "Dock a target protein against the loaded structure" : "Load a structure first"}
+          className="flex items-center gap-1.5 text-xs text-amber-300/90 hover:text-amber-200 border border-dashed border-amber-500/30 hover:border-amber-500/60 rounded-md px-2 py-1.5 w-full justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {addingTarget ? <Loader2 size={13} className="animate-spin" /> : <Target size={13} />}
+          {addingTarget ? "Placing…" : "Add target protein (dock)"}
+        </button>
         {pdbStatus && (
           <p className={`text-[11px] leading-snug ${pdbStatus.startsWith("Error") ? "text-red-400" : "text-emerald-400"}`}>
             {pdbStatus}
@@ -133,6 +166,7 @@ export function ControlPanel() {
         )}
         <p className="text-[10px] text-slate-600 leading-snug">
           Builds an elastic-network model: atoms become particles, nearby pairs become harmonic springs. Large structures coarse-grain to Cα.
+          <br />Add a target to place a second protein beside it (non-overlapping, distinctly coloured) with a Lennard-Jones term so they can drift together into an approximate binding pose.
         </p>
       </Section>
 

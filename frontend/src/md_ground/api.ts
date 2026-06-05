@@ -63,6 +63,16 @@ export async function importPDB(
   return jpost(`${BASE}/import-pdb`, { pdb, name, spring_k: springK, temperature });
 }
 
+export async function addTarget(
+  spec: SystemSpec,
+  pdb: string,
+  name: string,
+  gap = 5.0,
+  bindEpsilon = 0.4
+): Promise<{ spec: SystemSpec; n_particles: number; n_bonds: number }> {
+  return jpost(`${BASE}/add-target`, { spec, pdb, name, gap, bind_epsilon: bindEpsilon });
+}
+
 // Saved simulations
 export interface SavedSim {
   id: string;

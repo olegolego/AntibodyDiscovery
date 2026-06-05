@@ -161,3 +161,104 @@ def build_enm_spec(
         seed=0,
         stream=StreamConfig(frame_stride=10, max_fps=30),
     )
+
+
+def _recolor(types: list[ParticleType], color: str) -> list[ParticleType]:
+    """Return copies of particle types recoloured to one hue (per-body colouring)."""
+    return [t.model_copy(update={"color": color}) for t in types]
+
+
+def _normalised_type_index(spec: SystemSpec) -> list[int]:
+    if spec.type_index and len(spec.type_index) == spec.n_particles:
+        return list(spec.type_index)
+    return [0] * spec.n_particles
+
+
+# Distinct per-body colours so the two proteins are visually separable.
+_BODY_COLORS = ["#6366f1", "#f59e0b", "#10b981", "#ec4899"]
+
+
+def combine_with_target(
+    base: SystemSpec,
+    target_pdb: str,
+    target_name: str = "Target",
+    gap: float = 5.0,
+    bind_epsilon: float = 0.4,
+) -> SystemSpec:
+    """Place a target protein next to an already-loaded structure for docking.
+
+    Algorithm (guarantees the two structures fit but do NOT overlap):
+      1. Build the target as its own elastic-network body.
+      2. Centre A at the origin and slide B along +x until B's nearest face is
+         `gap` beyond A's far face. Because the two bodies' x-projections are then
+         disjoint (separated by `gap` > 0), every A–B atom pair differs in x by
+         more than `gap` — so they cannot overlap, yet the surfaces start close
+         enough for the non-bonded force to act (unlike bounding-sphere
+         separation, which over-separates elongated shapes out of LJ range).
+      3. Merge atoms, types (recoloured per body) and intra-body springs. No bonds
+         are created between the bodies, so each stays folded but they move as
+         independent rigid-ish bodies.
+      4. Size an open box around the union (+padding).
+      5. Add a Lennard-Jones term so the surfaces attract/repel — letting them
+         drift together and settle into an approximate binding pose. Each body's
+         shape is held by its much stronger ENM springs.
+    """
+    if not base.positions or len(base.positions) < 1:
+        raise PDBImportError("Load a structure first, then add a target to dock against it.")
+
+    target = build_enm_spec(target_pdb, name=target_name)
+
+    posA = np.array(base.positions, dtype=np.float64)
+    posB = np.array(target.positions, dtype=np.float64)
+
+    # Centre A at origin; place B's −x face `gap` past A's +x face.
+    posA = posA - posA.mean(axis=0)
+    posB = posB - posB.mean(axis=0)
+    shift_x = float(posA[:, 0].max()) + gap - float(posB[:, 0].min())
+    posB = posB + np.array([shift_x, 0.0, 0.0])
+
+    nA = len(posA)
+    typesA = _recolor(base.particle_types or [ParticleType()], _BODY_COLORS[0])
+    typesB = _recolor(target.particle_types or [ParticleType()], _BODY_COLORS[1])
+    tiA = _normalised_type_index(base)
+    tiB = [t + len(typesA) for t in _normalised_type_index(target)]
+
+    # Merge bonds; target bond indices shift by nA. No A–B bonds.
+    bonds = list(base.bonds)
+    for b in target.bonds:
+        bonds.append(Bond(i=b.i + nA, j=b.j + nA, r0=b.r0, k=b.k))
+
+    pos = np.vstack([posA, posB])
+    pad = 8.0
+    pos = pos - pos.min(axis=0) + pad
+    lengths = (pos.max(axis=0) + pad).tolist()
+
+    # Preserve existing force terms; ensure a Lennard-Jones binding term exists.
+    force_terms = [ft.model_copy() for ft in base.force_terms]
+    if not any(ft.kind == "lennard_jones" for ft in force_terms):
+        # sigma ~ a coarse bead diameter; wide cutoff so surfaces feel each other.
+        force_terms.append(ForceTerm(
+            kind="lennard_jones", enabled=True, epsilon=bind_epsilon, sigma=3.0, cutoff=4.0,
+        ))
+    if not any(ft.kind == "harmonic_bond" for ft in force_terms):
+        force_terms.append(ForceTerm(kind="harmonic_bond", enabled=True))
+
+    return SystemSpec(
+        name=f"{base.name} + {target_name}",
+        n_particles=nA + len(posB),
+        particle_types=typesA + typesB,
+        type_index=tiA + tiB,
+        positions=pos.tolist(),
+        box=Box(lengths=[float(l) for l in lengths], boundary="open"),
+        bonds=bonds,
+        force_terms=force_terms,
+        integrator="velocity_verlet",
+        thermostat="berendsen",
+        target_temperature=base.target_temperature or 0.6,
+        thermostat_coupling=0.1,
+        dt=min(base.dt, 0.01),
+        steps=max(base.steps, 30000),
+        temperature=base.temperature or 0.6,
+        seed=0,
+        stream=StreamConfig(frame_stride=10, max_fps=30),
+    )
