@@ -105,6 +105,48 @@ export interface Summary {
   wall_seconds: number;
 }
 
+// Full-precision final dynamical state — enough to resume the run exactly.
+export interface Checkpoint {
+  step: number;
+  time: number;
+  positions: number[]; // flat 3N
+  velocities: number[]; // flat 3N
+}
+
+// Reshape a flat 3N array into [N,3] for SystemSpec.positions / .velocities.
+export function reshape3(flat: number[]): number[][] {
+  const out: number[][] = [];
+  for (let i = 0; i < flat.length; i += 3) out.push([flat[i], flat[i + 1], flat[i + 2]]);
+  return out;
+}
+
+// Build a spec that resumes `spec` from a checkpoint: the final state becomes the
+// initial conditions, the preprocessing phases are skipped, and `moreSteps` of
+// production are queued. Falls back to a plain restart (fresh Maxwell-Boltzmann
+// velocities) from `fallbackPositions` when no checkpoint is available.
+export function continuationSpec(
+  spec: SystemSpec,
+  moreSteps: number,
+  checkpoint: Checkpoint | null,
+  fallbackPositions?: number[] | null,
+): SystemSpec {
+  const base: SystemSpec = {
+    ...spec,
+    minimize_steps: 0,
+    equilibrate_steps: 0,
+    steps: moreSteps,
+    name: spec.name.includes("(cont") ? spec.name : `${spec.name} (cont.)`,
+  };
+  if (checkpoint) {
+    base.positions = reshape3(checkpoint.positions);
+    base.velocities = reshape3(checkpoint.velocities);
+  } else if (fallbackPositions && fallbackPositions.length) {
+    base.positions = reshape3(fallbackPositions);
+    base.velocities = null; // engine re-draws Maxwell-Boltzmann at `temperature`
+  }
+  return base;
+}
+
 export interface PresetMeta {
   key: string;
   label: string;

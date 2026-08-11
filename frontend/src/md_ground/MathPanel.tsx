@@ -1,5 +1,7 @@
+import { useMemo } from "react";
 import katex from "katex";
 import "katex/dist/katex.min.css";
+import { estimateBinding, LIE_ALPHA, LIE_BETA, type BindingEstimate } from "./binding";
 import { useMDStore } from "./store";
 import type { ForceTerm } from "./types";
 
@@ -28,8 +30,8 @@ function Eq({ children }: { children: React.ReactNode }) {
   return <div className="overflow-x-auto py-0.5 text-slate-100">{children}</div>;
 }
 
-function Note({ children }: { children: React.ReactNode }) {
-  return <p className="text-[11px] text-slate-500 leading-snug">{children}</p>;
+function Note({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <p className={`text-[11px] text-slate-500 leading-snug ${className}`}>{children}</p>;
 }
 
 // Each renderer below mirrors the exact maths in backend/app/md/forces.py,
@@ -107,15 +109,81 @@ function texEscape(expr: string): string {
     .replace(/_/g, String.raw`\_`);
 }
 
+// Compact value formatter: plain for human-scale numbers, scientific for the
+// tiny/huge relative dissociation constant.
+function val(x: number): string {
+  if (!Number.isFinite(x)) return "—";
+  const a = Math.abs(x);
+  if (a !== 0 && (a < 1e-3 || a >= 1e4)) return x.toExponential(2);
+  return x.toFixed(3).replace(/\.?0+$/, "");
+}
+
+// Binding-affinity estimate from the trajectory. Documents the standard methods
+// (interaction energy, MM/PBSA, MM/GBSA, LIE, ΔG→Kd) and — when a two-body
+// system has been simulated — shows the live numbers the engine's own energy
+// terms imply for the antibody↔antigen interface.
+function BindingAffinity({ est }: { est: BindingEstimate }) {
+  const live = est.available;
+  return (
+    <Block title="Binding affinity (estimated)">
+      <Note>
+        Forming the complex releases the binding free energy, which is the affinity in disguise:
+      </Note>
+      <Eq><TeX block tex={String.raw`\Delta G_{\text{bind}}=G_{AB}-\left(G_{A}+G_{B}\right)=-RT\ln K_a=RT\ln K_d`} /></Eq>
+
+      <Note><b>1. Interaction energy</b> (what this engine measures directly): the mean non-bonded energy across the two bodies' interface — every {live ? <>{est.groupAName}↔{est.groupBName}</> : "A↔B"} pair, no intra-body springs.</Note>
+      <Eq><TeX block tex={String.raw`\langle U_{\text{int}}\rangle=\Big\langle\!\!\sum_{i\in A,\,j\in B}\!\!\big[U_{\text{LJ}}(r_{ij})+U_{\text{Coul}}(r_{ij})\big]\Big\rangle`} /></Eq>
+
+      <Note><b>2. MM/PBSA &amp; MM/GBSA</b> — the endpoint free-energy method. In the single-trajectory approximation the internal (bonded) terms cancel, so <TeX tex={String.raw`\Delta E_{\text{MM}}=\langle U_{\text{int}}\rangle`} />:</Note>
+      <Eq><TeX block tex={String.raw`\Delta G_{\text{bind}}=\underbrace{\Delta E_{\text{MM}}}_{\Delta E_{\text{vdw}}+\Delta E_{\text{elec}}}+\underbrace{\Delta G_{\text{solv}}}_{\Delta G_{\text{PB/GB}}+\gamma\,\text{SASA}+b}-\,T\Delta S`} /></Eq>
+      <Note>PBSA solves the Poisson–Boltzmann equation for the polar solvation term; GBSA uses the cheaper Generalized Born model — that single choice is the only difference. The nonpolar term is a surface-area model; <TeX tex={String.raw`-T\Delta S`} /> is the conformational entropy. Solvation and entropy are <i>not</i> modelled by this sandbox engine.</Note>
+
+      <Note><b>3. LIE</b> (Åqvist linear response) — scales the bound-vs-free interaction energies. Here the free state has zero interface energy by construction, so:</Note>
+      <Eq><TeX block tex={String.raw`\Delta G_{\text{LIE}}=\alpha\,\Delta\langle V_{\text{vdw}}\rangle+\beta\,\Delta\langle V_{\text{elec}}\rangle,\quad \alpha=${val(LIE_ALPHA)},\ \beta=${val(LIE_BETA)}`} /></Eq>
+
+      {!live ? (
+        <Note className="text-amber-400/80">{est.reason}</Note>
+      ) : (
+        <div className="mt-1 rounded-md border border-indigo-500/30 bg-indigo-500/5 p-2 space-y-1.5">
+          <div className="text-[11px] font-semibold text-indigo-300 uppercase tracking-wider">
+            Live estimate · {est.groupAName} ({est.nA}) ↔ {est.groupBName} ({est.nB})
+          </div>
+          <Eq><TeX tex={String.raw`\Delta E_{\text{vdw}}=${val(est.eVdw)},\quad \Delta E_{\text{elec}}=${val(est.eElec)},\quad \langle U_{\text{int}}\rangle=${val(est.eInt)}\ \varepsilon`} /></Eq>
+          <Eq><TeX tex={String.raw`\Delta G_{\text{LIE}}=${val(est.dgLIE)}\ \varepsilon,\qquad k_BT=${val(est.kT)}`} /></Eq>
+          <Eq><TeX tex={String.raw`\text{binding score}=-\langle U_{\text{int}}\rangle/k_BT=${val(est.scoreKT)},\qquad K_d^{\text{rel}}=e^{\langle U_{\text{int}}\rangle/k_BT}=${val(est.kdRel)}`} /></Eq>
+          <Note>
+            Averaged over the last {est.framesUsed} frame(s){est.subsampled ? ", interface subsampled for speed" : ""}.
+            {est.eInt < 0 ? " Net attraction — a favourable pose" : " No net attraction in this pose"}
+            {!est.hasCharges && " (structure carries no charges → electrostatics are zero)"}.
+            <b> Reduced units</b> (ε, kᵦ=1): a <i>relative</i> score for ranking poses/designs, not an absolute Kd.
+          </Note>
+        </div>
+      )}
+    </Block>
+  );
+}
+
 export function MathPanel() {
   const spec = useMDStore((s) => s.spec);
+  const frames = useMDStore((s) => s.frames);
+  const typeIndex = useMDStore((s) => s.typeIndex);
+  const particleTypes = useMDStore((s) => s.particleTypes);
   const enabled = spec.force_terms.filter((t) => t.enabled);
+
+  // Recompute only when the trajectory grows or the system changes, not on every
+  // render (the cross-interface sum is O(nA·nB) per sampled frame).
+  const binding = useMemo(
+    () => estimateBinding(frames, typeIndex, particleTypes, spec),
+    [frames, typeIndex, particleTypes, spec],
+  );
 
   return (
     <div className="space-y-3 text-sm">
       <Note>
         Every equation below is exactly what the engine computes for this setup (reduced units, <TeX tex={String.raw`k_B=1`} />). Distances use the minimum-image convention under periodic boundaries.
       </Note>
+
+      <BindingAffinity est={binding} />
 
       {enabled.length === 0 && <Note>No force terms enabled.</Note>}
       {enabled.map((t, i) => <ForceMath key={i} term={t} />)}

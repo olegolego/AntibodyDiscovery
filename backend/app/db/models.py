@@ -344,6 +344,10 @@ class MDSavedRunRow(Base):
     frames:         Mapped[str]      = mapped_column(Text, nullable=False, default="[]")   # JSON (decimated)
     energy_history: Mapped[str]      = mapped_column(Text, nullable=False, default="[]")   # JSON
     summary:        Mapped[str|None] = mapped_column(Text, nullable=True)                  # JSON
+    # Full-precision final state {step, time, positions, velocities} for resuming
+    # the dynamics exactly. Null for runs saved before this was added (those can
+    # only be restarted approximately, from the last frame's positions).
+    checkpoint:     Mapped[str|None] = mapped_column(Text, nullable=True)                  # JSON
     n_particles:    Mapped[int]      = mapped_column(Integer, nullable=False, default=0)
     n_frames:       Mapped[int]      = mapped_column(Integer, nullable=False, default=0)
     created_at:     Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

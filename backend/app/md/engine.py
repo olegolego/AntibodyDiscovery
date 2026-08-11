@@ -251,3 +251,17 @@ class Simulation:
 
     def flat_positions(self) -> list[float]:
         return self.pos.reshape(-1).tolist()
+
+    def flat_velocities(self) -> list[float]:
+        return self.vel.reshape(-1).tolist()
+
+    def checkpoint(self) -> dict:
+        """Full-precision restartable state. Positions + velocities are all the
+        engine needs to resume identically (velocity-Verlet recomputes forces
+        from positions; the thermostats are memoryless)."""
+        return {
+            "step": self.step_index,
+            "time": self.time,
+            "positions": self.flat_positions(),
+            "velocities": self.flat_velocities(),
+        }

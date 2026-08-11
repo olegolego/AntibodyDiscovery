@@ -152,5 +152,8 @@ async def run_simulation(sim_id: str, spec: SystemSpec) -> dict:
         return _make_summary(sim, time.monotonic() - start)
 
     summary = _make_summary(sim, time.monotonic() - start)
-    await manager.broadcast(sim_id, {"type": "done", "summary": summary})
+    # Ship the full final state so the client can persist it and resume later.
+    await manager.broadcast(sim_id, {
+        "type": "done", "summary": summary, "checkpoint": sim.checkpoint(),
+    })
     return summary

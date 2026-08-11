@@ -139,6 +139,7 @@ class SaveRunRequest(BaseModel):
     frames: list = []           # [{step, time, positions: [..]}]
     energy_history: list = []
     summary: dict | None = None
+    checkpoint: dict | None = None   # {step, time, positions, velocities} for resuming
 
 
 def _decimate(items: list, cap: int) -> list:
@@ -157,6 +158,7 @@ async def list_saved_runs(db: AsyncSession = Depends(get_db)) -> list[dict]:
         {
             "id": r.id, "name": r.name, "n_particles": r.n_particles,
             "n_frames": r.n_frames, "created_at": r.created_at.isoformat(),
+            "resumable": r.checkpoint is not None,
         }
         for r in rows
     ]
@@ -177,6 +179,7 @@ async def save_run(body: SaveRunRequest, db: AsyncSession = Depends(get_db)) -> 
         frames=json.dumps(frames),
         energy_history=json.dumps(_decimate(body.energy_history, 1000)),
         summary=json.dumps(body.summary) if body.summary is not None else None,
+        checkpoint=json.dumps(body.checkpoint) if body.checkpoint is not None else None,
         n_particles=n_particles,
         n_frames=len(frames),
     )
@@ -202,6 +205,7 @@ async def get_saved_run(run_id: str, db: AsyncSession = Depends(get_db)) -> dict
         "energy_history": json.loads(row.energy_history),
         "frames": json.loads(row.frames),
         "summary": json.loads(row.summary) if row.summary else None,
+        "checkpoint": json.loads(row.checkpoint) if row.checkpoint else None,
     }
 
 

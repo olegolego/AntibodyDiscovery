@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Atom, Database, Film, Play, Save, Sigma, Square, TrendingUp } from "lucide-react";
+import { ArrowLeft, Atom, Database, Film, Play, Save, Sigma, SkipForward, Square, TrendingUp } from "lucide-react";
 import { randomUUID } from "@/utils";
 import { ControlPanel } from "./ControlPanel";
 import { EnergyCharts } from "./EnergyCharts";
@@ -8,6 +8,7 @@ import { PlaybackControls } from "./PlaybackControls";
 import { Viewer3D } from "./Viewer3D";
 import { useMDSocket } from "./useMDSocket";
 import { useMDStore } from "./store";
+import { continuationSpec } from "./types";
 import { downloadTrajectoryXYZ } from "./exporters";
 import { getSavedRun, listSavedRuns, saveRun, type SavedRunMeta } from "./api";
 import type { SavedRunData } from "./store";
@@ -36,7 +37,7 @@ export function MDGroundPage({ onBack }: { onBack: () => void }) {
   const status = useMDStore((s) => s.status);
   const error = useMDStore((s) => s.error);
   const phase = useMDStore((s) => s.phase);
-  const resetPlayback = useMDStore((s) => s.resetPlayback);
+  const prepareRun = useMDStore((s) => s.prepareRun);
   const [rightTab, setRightTab] = useState<"energy" | "math">("energy");
   const [savedRuns, setSavedRuns] = useState<SavedRunMeta[]>([]);
   const [saving, setSaving] = useState(false);
@@ -44,6 +45,10 @@ export function MDGroundPage({ onBack }: { onBack: () => void }) {
   const isRunning = status === "running" || status === "connecting";
   const st = STATUS_LABEL[status] ?? STATUS_LABEL.idle;
   const hasFrames = useMDStore((s) => s.frames.length > 0);
+  const checkpoint = useMDStore((s) => s.checkpoint);
+  // Resume is possible once a run has finished: exactly from a checkpoint, or
+  // approximately (fresh velocities) from the last frame's positions.
+  const canContinue = !isRunning && (checkpoint !== null || hasFrames);
 
   const refreshSavedRuns = () => listSavedRuns().then(setSavedRuns).catch(() => {});
   useEffect(() => { refreshSavedRuns(); }, []);
@@ -63,6 +68,7 @@ export function MDGroundPage({ onBack }: { onBack: () => void }) {
         frames: s.frames.map((f) => ({ step: f.step, time: f.time, positions: Array.from(f.positions) })),
         energy_history: s.energyHistory,
         summary: s.summary,
+        checkpoint: s.checkpoint,
       });
       await refreshSavedRuns();
       s.setStatus(s.status, null);
@@ -89,8 +95,42 @@ export function MDGroundPage({ onBack }: { onBack: () => void }) {
   }
 
   function handleRun() {
-    resetPlayback();
+    prepareRun({ append: false });
     start(spec);
+  }
+
+  // Resume the dynamics from where the last run stopped, APPENDING to the same
+  // timeline (the scrubber spans every run; steps stay monotonic). With a
+  // checkpoint the resume is physically exact (same positions + velocities);
+  // without one it restarts from the final positions with fresh velocities.
+  function handleContinue() {
+    const s = useMDStore.getState();
+    const cp = s.checkpoint;
+    const lastFrame = s.frames.length ? s.frames[s.frames.length - 1] : null;
+    const fallback = cp ? null : lastFrame ? Array.from(lastFrame.positions) : null;
+    if (!cp && !fallback) return;
+
+    const def = String(s.spec.steps || 5000);
+    const ans = window.prompt(
+      cp
+        ? "Continue the simulation for how many more steps? (exact resume from the saved state)"
+        : "No exact checkpoint — restart from the final frame with fresh velocities.\nRun for how many steps?",
+      def,
+    );
+    if (ans === null) return;
+    const moreSteps = Math.max(1, Math.floor(Number(ans) || s.spec.steps));
+
+    // The continuation's internal step/time restart at 0 — offset them onto the
+    // END of the current timeline so it reads as one continuous run. Use the last
+    // frame's GLOBAL step (the checkpoint's own step is engine-internal and
+    // restarts each run, so it would be wrong on a second continuation).
+    const stepOffset = lastFrame ? lastFrame.step : cp ? cp.step : 0;
+    const timeOffset = lastFrame ? lastFrame.time : cp ? cp.time : 0;
+
+    const next = continuationSpec(s.spec, moreSteps, cp, fallback);
+    s.setSpec(next);
+    prepareRun({ append: true, stepOffset, timeOffset });
+    start(next);
   }
 
   return (
@@ -141,6 +181,16 @@ export function MDGroundPage({ onBack }: { onBack: () => void }) {
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white border border-border hover:border-slate-500 disabled:opacity-40">
           <Film size={13} /> XYZ
         </button>
+
+        {canContinue && (
+          <button onClick={handleContinue}
+            title={checkpoint
+              ? "Resume the dynamics exactly from the saved final state (positions + velocities)"
+              : "Restart from the final frame with fresh velocities (no exact checkpoint for this run)"}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white border border-border hover:border-slate-500">
+            <SkipForward size={13} /> {checkpoint ? "Continue" : "Continue*"}
+          </button>
+        )}
 
         {isRunning ? (
           <button onClick={cancel}

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  Checkpoint,
   Energy,
   InitMessage,
   MDFrame,
@@ -40,6 +41,16 @@ interface MDState {
   follow: boolean; // stick to the newest frame as it streams in
   energyHistory: { step: number; kinetic: number; potential: number; total: number; temperature: number }[];
   summary: Summary | null;
+  checkpoint: Checkpoint | null; // final state of the last run; enables exact resume
+
+  // Continuation bookkeeping: a resumed run appends to the same timeline. The
+  // engine still counts steps from 0, so incoming step/time are shifted by these
+  // offsets to stay globally monotonic across runs. `segments` holds the global
+  // step at which each appended run began, so the scrubber can mark the seams.
+  stepOffset: number;
+  timeOffset: number;
+  appending: boolean;
+  segments: number[];
 
   view: ViewOptions;
 
@@ -53,6 +64,10 @@ interface MDState {
   setPlaying: (p: boolean) => void;
   setFollow: (f: boolean) => void;
   setSummary: (s: Summary) => void;
+  setCheckpoint: (c: Checkpoint | null) => void;
+  // Arm the next run: fresh (clears the timeline) or appended continuation
+  // (keeps it, shifting incoming steps/time by the given offsets).
+  prepareRun: (opts: { append: boolean; stepOffset?: number; timeOffset?: number }) => void;
   resetPlayback: () => void;
   toggleView: (k: keyof ViewOptions) => void;
   loadRun: (run: SavedRunData) => void;
@@ -67,6 +82,7 @@ export interface SavedRunData {
   energy_history: ({ step: number } & Energy)[];
   frames: { step: number; time: number; positions: number[] }[];
   summary: Summary | null;
+  checkpoint?: Checkpoint | null;
 }
 
 export const useMDStore = create<MDState>((set) => ({
@@ -86,6 +102,11 @@ export const useMDStore = create<MDState>((set) => ({
   follow: true,
   energyHistory: [],
   summary: null,
+  checkpoint: null,
+  stepOffset: 0,
+  timeOffset: 0,
+  appending: false,
+  segments: [],
 
   view: { showBox: true, showBonds: true, showVelocities: false, colorBySpeed: false },
 
@@ -94,25 +115,44 @@ export const useMDStore = create<MDState>((set) => ({
   setStatus: (status, error = null) => set({ status, error }),
 
   applyInit: (msg) =>
-    set({
-      particleTypes: msg.particle_types,
-      typeIndex: msg.type_index,
-      boxLengths: msg.box.lengths as [number, number, number],
-      totalSteps: msg.total_steps,
-      frames: [],
-      phase: "",
-      energyHistory: [],
-      playbackIndex: 0,
-      playing: true,
-      follow: true,
-      summary: null,
+    set((s) => {
+      const common = {
+        particleTypes: msg.particle_types,
+        typeIndex: msg.type_index,
+        boxLengths: msg.box.lengths as [number, number, number],
+        playing: true,
+        follow: true,
+      };
+      // Continuation: keep the existing timeline, just extend the step budget.
+      if (s.appending) {
+        return { ...common, totalSteps: s.stepOffset + msg.total_steps };
+      }
+      // Fresh run: wipe the buffers and the previous final state.
+      return {
+        ...common,
+        totalSteps: msg.total_steps,
+        frames: [],
+        phase: "",
+        energyHistory: [],
+        playbackIndex: 0,
+        summary: null,
+        checkpoint: null,
+      };
     }),
 
   pushFrame: (step, time, positions, energy, phase) =>
     set((s) => {
+      // Shift into the global timeline so a resumed run continues monotonically.
+      const gstep = step + s.stepOffset;
+      const gtime = time + s.timeOffset;
+      // A continuation's first emitted frame restates the checkpoint (step ==
+      // offset == last existing step). Skip it so the seam has no duplicate.
+      const last = s.frames[s.frames.length - 1];
+      if (last && gstep <= last.step) return { phase: phase ?? s.phase };
+
       const frame: MDFrame = {
-        step,
-        time,
+        step: gstep,
+        time: gtime,
         positions: Float32Array.from(positions),
         energy,
       };
@@ -120,7 +160,7 @@ export const useMDStore = create<MDState>((set) => ({
       frames.push(frame);
       const energyHistory =
         s.energyHistory.length >= MAX_FRAMES ? s.energyHistory.slice(1) : s.energyHistory.slice();
-      energyHistory.push({ step, ...energy });
+      energyHistory.push({ step: gstep, ...energy });
       // If following, jump the playhead to the freshest frame.
       const playbackIndex = s.follow ? frames.length - 1 : s.playbackIndex;
       return { frames, energyHistory, playbackIndex, phase: phase ?? s.phase };
@@ -134,9 +174,34 @@ export const useMDStore = create<MDState>((set) => ({
   setPlaying: (playing) => set({ playing }),
   setFollow: (follow) => set({ follow }),
   setSummary: (summary) => set({ summary }),
+  setCheckpoint: (checkpoint) => set({ checkpoint }),
+
+  prepareRun: ({ append, stepOffset = 0, timeOffset = 0 }) =>
+    set((s) => {
+      if (append) {
+        // Keep the timeline; record a seam at the global step the run begins.
+        return { appending: true, stepOffset, timeOffset, segments: [...s.segments, stepOffset] };
+      }
+      // Fresh run from step 0 — clear everything.
+      return {
+        appending: false,
+        stepOffset: 0,
+        timeOffset: 0,
+        segments: [],
+        frames: [],
+        energyHistory: [],
+        playbackIndex: 0,
+        playing: false,
+        summary: null,
+        checkpoint: null,
+      };
+    }),
 
   resetPlayback: () =>
-    set({ frames: [], energyHistory: [], playbackIndex: 0, playing: false, summary: null }),
+    set({
+      frames: [], energyHistory: [], playbackIndex: 0, playing: false, summary: null,
+      checkpoint: null, stepOffset: 0, timeOffset: 0, appending: false, segments: [],
+    }),
 
   toggleView: (k) => set((s) => ({ view: { ...s.view, [k]: !s.view[k] } })),
 
@@ -154,6 +219,12 @@ export const useMDStore = create<MDState>((set) => ({
       })),
       energyHistory: run.energy_history,
       summary: run.summary,
+      checkpoint: run.checkpoint ?? null,
+      // A loaded run is one continuous timeline; resume offsets start from its end.
+      stepOffset: 0,
+      timeOffset: 0,
+      appending: false,
+      segments: [],
       status: "done",
       error: null,
       phase: "",

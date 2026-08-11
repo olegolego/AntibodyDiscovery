@@ -1,4 +1,4 @@
-import type { PresetMeta, SystemSpec } from "./types";
+import type { Checkpoint, PresetMeta, SystemSpec } from "./types";
 
 const BASE = "/api/md-ground";
 
@@ -111,6 +111,7 @@ export interface SavedRunMeta {
   n_particles: number;
   n_frames: number;
   created_at: string;
+  resumable: boolean;
 }
 
 export interface SaveRunPayload {
@@ -122,6 +123,7 @@ export interface SaveRunPayload {
   frames: { step: number; time: number; positions: number[] }[];
   energy_history: unknown[];
   summary: unknown;
+  checkpoint: Checkpoint | null;
 }
 
 export async function listSavedRuns(): Promise<SavedRunMeta[]> {

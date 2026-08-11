@@ -36,6 +36,7 @@ async def _migrate(conn) -> None:
         ("runs", "loop_id TEXT"),
         ("runs", "iteration INTEGER"),
         ("loop_runs", "loop_history TEXT"),
+        ("md_saved_runs", "checkpoint TEXT"),
     ]:
         try:
             await conn.execute(_sa.text(f"ALTER TABLE {table} ADD COLUMN {col}"))

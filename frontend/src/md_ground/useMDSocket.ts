@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useMDStore } from "./store";
-import type { Energy, InitMessage, Summary, SystemSpec } from "./types";
+import type { Checkpoint, Energy, InitMessage, Summary, SystemSpec } from "./types";
 
 // Opens a persistent WebSocket to /ws/md-ground/{simId} and wires incoming
 // frames into the store. Returns imperative start()/cancel() controls.
@@ -13,6 +13,7 @@ export function useMDSocket(simId: string) {
   const pushFrame = useMDStore((s) => s.pushFrame);
   const setStatus = useMDStore((s) => s.setStatus);
   const setSummary = useMDStore((s) => s.setSummary);
+  const setCheckpoint = useMDStore((s) => s.setCheckpoint);
 
   useEffect(() => {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -57,6 +58,7 @@ export function useMDSocket(simId: string) {
           case "done":
             setStatus("done");
             setSummary(msg.summary as Summary);
+            setCheckpoint((msg.checkpoint as Checkpoint) ?? null);
             break;
           case "error":
             setStatus("error", String(msg.message ?? "Simulation error"));
@@ -80,7 +82,7 @@ export function useMDSocket(simId: string) {
       clearTimeout(retry);
       wsRef.current?.close();
     };
-  }, [simId, applyInit, pushFrame, setStatus, setSummary]);
+  }, [simId, applyInit, pushFrame, setStatus, setSummary, setCheckpoint]);
 
   function start(spec: SystemSpec) {
     setStatus("connecting");
